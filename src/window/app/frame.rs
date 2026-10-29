@@ -220,6 +220,7 @@ impl App {
             .set_screen_height(self.geom.monitor_size.1 as f32);
         self.lingosoul.set_expanded(self.expanded);
         self.lingosoul.update(dt);
+        self.update_assistant_reveal(&window);
         self.serve_assistant_requests();
         self.sync_chat_focus();
         self.update_lyrics(&window, music_active, is_paused, dt);
@@ -553,6 +554,7 @@ impl App {
             self.reset_page();
             self.hide.manual = true;
             self.hide.auto = false;
+            self.hide.assistant_reveal = false;
             log::info!("Island hidden by hotkey");
         }
         window.request_redraw();
@@ -740,6 +742,7 @@ impl App {
             && !self.expanded
             && !self.is_dragging
             && !compact_overlay_visible
+            && !self.lingosoul.is_active()
             && (self.components_hidden || !self.activity_mgr.keeps_visible());
         if !self.config.auto_hide {
             let was_auto_hidden = self.hide.auto;
@@ -938,6 +941,17 @@ impl App {
         if !(self.is_hidden() || self.hide.fullscreen && self.hide.overlay_reveal) {
             self.restore_hide_origin(window);
         }
+        let pulling_chat = self.is_dragging
+            && !self.dismissing_notification
+            && !self.expanded
+            && self.drag_axis == Some(DragAxis::Vertical)
+            && self.springs.hide.value <= 0.3
+            && self.lingosoul.is_connected();
+        self.lingosoul.set_pull(if pulling_chat {
+            (py - self.drag_start_py) as f32
+        } else {
+            0.0
+        });
         if self.springs.hide.velocity.abs() > 0.001
             || (self.springs.hide.value > 0.0 && self.springs.hide.value < 1.0)
         {
@@ -1095,10 +1109,17 @@ impl App {
             self.config.compact_scale,
         ) {
             (size.width, size.height, size.height / 2.0)
-        } else {
+        } else if self.expanded {
             (compact_widget_target_w, default_target_h, default_target_r)
+        } else {
+            self.lingosoul.stretch(
+                &self.config,
+                (compact_widget_target_w, default_target_h, default_target_r),
+            )
         };
-        let (stiffness, damping) = if lingosoul_target.is_some() || self.lingosoul.wants_glass() {
+        let (stiffness, damping) = if let Some(motion) = self.lingosoul.panel_motion() {
+            motion
+        } else if lingosoul_target.is_some() || self.lingosoul.wants_glass() {
             (0.15, 0.72)
         } else {
             (0.10, 0.68)

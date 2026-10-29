@@ -14,6 +14,7 @@ use winisland_render::{Point, Rect};
 use super::App;
 use crate::core::assistant::{AssistantCommand, AssistantLink, AssistantRequest, AssistantState};
 use crate::core::lingosoul_install::{self, AgentProcess};
+use crate::platform::WindowRef;
 use crate::plugin::inventory::InstalledPlugin;
 use crate::ui::island::LingoSoulStyle;
 use crate::ui::lingosoul_chat::{ChatHit, ChatPanel};
@@ -30,6 +31,13 @@ const WAVE_CLOSE: f32 = 0.16;
 const WAVE_SPEED: f32 = -2.7;
 const PANEL_HEIGHT: f32 = 2.1;
 const PANEL_SCREEN_SHARE: f32 = 0.62;
+/// Island springs for the panel. The drop's springs overshoot about 20%, which on a panel
+/// several times the compact height reads as a jolt; these settle with a few percent.
+const PANEL_OPEN_SPRING: (f32, f32) = (0.065, 0.71);
+const PANEL_CLOSE_SPRING: (f32, f32) = (0.2, 0.48);
+const PANEL_PULL_SPRING: (f32, f32) = (0.3, 0.5);
+/// Share of the way to the panel size a downward drag can stretch the island before release.
+const PULL_STRETCH: f32 = 0.3;
 const PLUGIN_CALL_TIMEOUT: Duration = Duration::from_secs(25);
 const MAX_PASTE: usize = 4000;
 /// A second tap within this window counts as a double tap.
@@ -65,6 +73,10 @@ pub(super) struct LingoSoulView {
     beam: Spring,
     panel: Spring,
     panel_open: bool,
+    /// How far the compact island is being dragged down towards the panel, in pixels.
+    pull: f32,
+    /// `is_active` as of the last `activity_changed`.
+    was_active: bool,
     chat: ChatPanel,
     window_extended: bool,
     screen_h: f32,
@@ -115,6 +127,8 @@ impl LingoSoulView {
             beam: Spring::new(0.0),
             panel: Spring::new(0.0),
             panel_open: false,
+            pull: 0.0,
+            was_active: false,
             chat: ChatPanel::default(),
             window_extended: false,
             screen_h: 0.0,
@@ -283,8 +297,15 @@ impl LingoSoulView {
         self.reply.update_dt(reply, reply_stiffness, 0.55, dt);
         self.reply.settle(reply, 0.001, 0.001);
         let panel = if self.panel_open { 1.0 } else { 0.0 };
-        let panel_stiffness = if self.panel_open { 0.05 } else { 0.3 };
-        self.panel.update_dt(panel, panel_stiffness, 0.6, dt);
+        let (panel_stiffness, panel_damping) = if self.panel_open {
+            PANEL_OPEN_SPRING
+        } else {
+            // Slow enough that the island is home before `panel_motion` hands it back to the
+            // bouncier compact spring, which would otherwise dip it below the compact size.
+            (0.1, 0.6)
+        };
+        self.panel
+            .update_dt(panel, panel_stiffness, panel_damping, dt);
         self.panel.settle(panel, 0.001, 0.001);
 
         let seconds = dt / 60.0;
@@ -306,6 +327,17 @@ impl LingoSoulView {
             self.phase += dt / 60.0 * (1.0 + 2.0 * self.level);
             self.dots += dt / 60.0;
         }
+    }
+
+    /// Whether the island is showing an exchange: the drop, dots, a reply or the panel.
+    pub(super) fn is_active(&self) -> bool {
+        self.requested != AssistantState::Idle || self.panel_open
+    }
+
+    /// The new `is_active` when an exchange has just started or ended.
+    fn activity_changed(&mut self) -> Option<bool> {
+        let active = self.is_active();
+        (std::mem::replace(&mut self.was_active, active) != active).then_some(active)
     }
 
     pub(super) fn needs_backdrop(&self) -> bool {
@@ -350,7 +382,48 @@ impl LingoSoulView {
 
     /// Extra window height the open chat panel needs.
     pub(super) fn panel_extent(&self, config: &AppConfig) -> Option<f32> {
-        (self.panel_open || self.panel.value > 0.001).then(|| self.panel_size(config).1)
+        (self.panel_open || self.panel.value > 0.001 || self.pull > 0.0)
+            .then(|| self.panel_size(config).1)
+    }
+
+    pub(super) fn is_connected(&self) -> bool {
+        self.link.is_connected()
+    }
+
+    pub(super) fn set_pull(&mut self, pull: f32) {
+        self.pull = pull.max(0.0);
+    }
+
+    /// Spring stiffness and damping for the island while the panel is pulled, opens or closes.
+    pub(super) fn panel_motion(&self) -> Option<(f32, f32)> {
+        if self.panel_open {
+            Some(PANEL_OPEN_SPRING)
+        } else if self.pull > 0.0 {
+            Some(PANEL_PULL_SPRING)
+        } else if self.panel.value > 0.001 {
+            Some(PANEL_CLOSE_SPRING)
+        } else {
+            None
+        }
+    }
+
+    /// Stretches the compact island towards the panel while it is dragged down, with
+    /// resistance, so the open that follows the release continues the same motion.
+    pub(super) fn stretch(&self, config: &AppConfig, compact: (f32, f32, f32)) -> (f32, f32, f32) {
+        if self.pull <= 0.0 || self.panel_open {
+            return compact;
+        }
+        let (w, h, r) = compact;
+        let (panel_w, panel_h) = self.panel_size(config);
+        let span = (panel_h - h).max(1.0);
+        let limit = span * PULL_STRETCH;
+        let t = limit * (1.0 - (-self.pull / limit).exp()) / span;
+        let panel_r = crate::ui::lingosoul_chat::PANEL_RADIUS * config.expanded_scale;
+        (
+            w + (panel_w.max(w) - w) * t,
+            h + span * t,
+            r + (panel_r.min(panel_h * 0.36) - r) * t,
+        )
     }
 
     pub(super) fn target_size(
@@ -700,6 +773,28 @@ impl App {
     /// Tells the assistant that the settings page rewrote its config.
     pub(super) fn reload_lingosoul(&mut self) {
         self.lingosoul.link.reload();
+    }
+
+    /// An auto- or manually hidden island comes back when an exchange starts, the way it does
+    /// for a notification, and hides again once it ends. Fullscreen hiding stays in force.
+    pub(super) fn update_assistant_reveal(&mut self, window: &WindowRef) {
+        match self.lingosoul.activity_changed() {
+            Some(true) if self.is_hidden() && !self.fullscreen_hide_active() => {
+                self.hide.assistant_reveal = true;
+                self.springs.hide.velocity = -0.65;
+                self.idle_timer = Instant::now();
+                log::info!("Island temporarily revealed for LingoSoul");
+                window.request_redraw();
+            }
+            Some(false) if self.hide.assistant_reveal => {
+                self.hide.assistant_reveal = false;
+                if self.hide.has_hidden_reason() {
+                    self.prepare_hide(window);
+                }
+                window.request_redraw();
+            }
+            _ => {}
+        }
     }
 
     /// Swiping down on the compact island opens the chat while an assistant is running.

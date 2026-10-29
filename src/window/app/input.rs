@@ -609,6 +609,7 @@ impl App {
                 self.hide.manual = true;
                 self.hide.auto = false;
                 self.hide.fullscreen = false;
+                self.hide.assistant_reveal = false;
             } else {
                 self.hide.manual = false;
                 self.hide.auto = false;

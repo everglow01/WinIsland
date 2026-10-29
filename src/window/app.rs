@@ -513,12 +513,17 @@ struct HideState {
     fullscreen: bool,
     notification_reveal: bool,
     overlay_reveal: bool,
+    /// Shown for a LingoSoul exchange; hides again when it ends.
+    assistant_reveal: bool,
     origin: Option<(i32, i32)>,
 }
 
 impl HideState {
     fn is_hidden(&self) -> bool {
-        self.has_hidden_reason() && !self.notification_reveal && !self.overlay_reveal
+        self.has_hidden_reason()
+            && !self.notification_reveal
+            && !self.overlay_reveal
+            && !self.assistant_reveal
     }
 
     fn has_hidden_reason(&self) -> bool {
@@ -733,6 +738,7 @@ impl App {
         self.hide.manual = false;
         self.hide.notification_reveal = false;
         self.hide.overlay_reveal = false;
+        self.hide.assistant_reveal = false;
         self.springs.hide.velocity = -0.65;
         self.idle_timer = Instant::now();
     }

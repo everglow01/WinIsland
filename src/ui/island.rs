@@ -135,7 +135,10 @@ pub struct LingoSoulStyle {
 
 impl LingoSoulStyle {
     fn covers_content(&self) -> f32 {
-        self.cover.max((self.drop * 4.0).min(1.0)).clamp(0.0, 1.0)
+        self.cover
+            .max((self.drop * 4.0).min(1.0))
+            .max((self.panel * 3.0).min(1.0))
+            .clamp(0.0, 1.0)
     }
 }
 

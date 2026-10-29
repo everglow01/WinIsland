@@ -14,6 +14,8 @@ const TOP_PAD: f32 = 10.0;
 const HEADER_H: f32 = 32.0;
 /// Corner radius of the open panel, in logical pixels.
 pub(crate) const PANEL_RADIUS: f32 = 30.0;
+/// How far above its place the content starts while the panel opens, in logical pixels.
+const REVEAL_SLIDE: f32 = 14.0;
 const INPUT_H: f32 = 38.0;
 const INPUT_GAP: f32 = 10.0;
 const MESSAGE_GAP: f32 = 14.0;
@@ -295,13 +297,22 @@ impl ChatPanel {
         if alpha <= 0.001 || rect.width() <= 0.0 || self.size.0 <= 0.0 {
             return;
         }
+        // Follow the island's shape rather than a separate timer, so the content never shows
+        // in a half-grown island and drifts down into place as the panel unrolls.
+        let open = (rect.height() / (self.size.1 * scale)).clamp(0.0, 1.0);
+        let reveal = ((open - 0.45) / 0.45).clamp(0.0, 1.0);
+        let reveal = reveal * reveal * (3.0 - 2.0 * reveal);
+        let alpha = alpha * reveal;
+        if alpha <= 0.001 {
+            return;
+        }
         let layout = layout(self.size.0, self.size.1, self.voice);
         let fade = |color: Rgba| color.with_alpha_f(f32::from(color.a()) / 255.0 * alpha);
         let base = painter.save();
         painter.clip_rect(rect);
         painter.translate(Vec2::new(
             rect.left + (rect.width() - self.size.0 * scale) * 0.5,
-            rect.top,
+            rect.top - (1.0 - reveal) * REVEAL_SLIDE * scale,
         ));
         painter.scale(Vec2::new(scale, scale));
 
