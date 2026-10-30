@@ -6,12 +6,14 @@
 
 [English](./README.md) | 简体中文
 
-这是一个可以在 Windows 上显示**灵动岛**的项目。
+WinIsland 为 Windows 带来**灵动岛**体验。
 
 ## 下载
-你可以在 [Release](https://github.com/WinIslandProject/WinIsland/releases) 或者我们的 [网站](https://tanikaze.icu/) 下载WinIsland
+
+你可以从 [GitHub Releases](https://github.com/WinIslandProject/WinIsland/releases) 或[我们的网站](https://tanikaze.icu/)下载 WinIsland。
 
 ## 社区
+
 加入 QQ 群：`435799156`
 
 ## 支持项目
@@ -22,8 +24,7 @@
 
 ## 构建项目
 
-- **Rust** 环境
-- **Cargo**
+安装包含 **Cargo** 的 **Rust** 工具链，然后运行：
 
 ```cmd
 git clone https://github.com/WinIslandProject/WinIsland.git
@@ -33,19 +34,17 @@ cd WinIsland
 cargo build --release
 ```
 
-
 ## 贡献
-我们欢迎任何形式的贡献！
 
-如果你有精力或兴趣，欢迎提交 PR。
-
-在提PR前，请先看[Contributing](CONTRIBUTING-zh.md)
+欢迎参与贡献和提交 PR。提交前，请先阅读[贡献指南](CONTRIBUTING-zh.md)。
 
 > [!IMPORTANT]
-> 所有未遵守[贡献指南](CONTRIBUTING-zh.md)的PR将会被close
+> 所有未遵守[贡献指南](CONTRIBUTING-zh.md)的 PR 都将被关闭。
 
 ## 隐私
-WinIsland 不收集任何遥测数据。它处理哪些信息、哪些功能会联网，请参阅[隐私政策](PRIVACY-zh.md)。
+
+WinIsland 不收集任何遥测数据。有关其处理的信息及需要联网的功能，请参阅[隐私政策](PRIVACY-zh.md)。
 
 ## 许可证
-本项目遵循 [GNU General Public License v3.0.](LICENSE)
+
+本项目采用 [GNU General Public License v3.0](LICENSE) 许可证。

@@ -2,16 +2,18 @@
   <img src="resources/info-en.png" width="350" alt="">
 </p>
 
-## WinIsland
+# WinIsland
 
 English | [简体中文](./README-zh.md)
 
-This is a project that can display **Dynamic Island** on Windows.
+WinIsland brings the **Dynamic Island** experience to Windows.
 
-## Download it
-you can in [Release](https://github.com/WinIslandProject/WinIsland/releases) or our [website](https://tanikaze.icu/) Download WinIsland
+## Download
+
+Download WinIsland from [GitHub Releases](https://github.com/WinIslandProject/WinIsland/releases) or [our website](https://tanikaze.icu/).
 
 ## Community
+
 Join the QQ group: `435799156`
 
 ## Support
@@ -20,10 +22,9 @@ Join the QQ group: `435799156`
   <img src="https://img.shields.io/badge/Support_WinIsland-7C3AED?style=for-the-badge&logo=buymeacoffee&logoColor=white" alt="Support WinIsland">
 </a>
 
-## Build it 
+## Build
 
-- **Rust** environment
-- **Cargo**
+Install the **Rust** toolchain, which includes **Cargo**, then run:
 
 ```cmd
 git clone https://github.com/WinIslandProject/WinIsland.git
@@ -33,19 +34,17 @@ cd WinIsland
 cargo build --release
 ```
 
+## Contributing
 
-## Contributes 
-We encourage contributions
-
-If you have the energy or interest, PR are welcome
-
-And You should see [Contributing](CONTRIBUTING.md)
+Contributions and pull requests are welcome. Please read the [contribution guidelines](CONTRIBUTING.md) before submitting a PR.
 
 > [!IMPORTANT]
-> Any PRs not following the [Contributing Guidelines](CONTRIBUTING.md) will be closed.
+> PRs that do not follow the [contribution guidelines](CONTRIBUTING.md) will be closed.
 
 ## Privacy
-WinIsland collects no telemetry. See the [Privacy Policy](PRIVACY.md) for what it processes and which features use the network.
 
-## LICENCE
-This project is subject to the [GNU General Public License v3.0](LICENSE).
+WinIsland collects no telemetry. See the [privacy policy](PRIVACY.md) for details on what information it processes and which features use the network.
+
+## License
+
+This project is licensed under the [GNU General Public License v3.0](LICENSE).
