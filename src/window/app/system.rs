@@ -666,6 +666,8 @@ impl App {
                         .set_lyrics_source(self.config.lyrics_source.clone());
                     self.smtc
                         .set_lyrics_local_dir(self.config.lyrics_local_dir.clone());
+                    self.smtc
+                        .set_show_secondary_lyrics(self.config.show_secondary_lyrics);
                     self.smtc.set_allowed_apps(self.config.smtc_apps.clone());
                     if old_system_controls_overlay != self.config.system_controls_overlay {
                         self.compact_overlay.set_system_controls_overlay_enabled(

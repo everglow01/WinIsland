@@ -1,7 +1,9 @@
 use std::ffi::c_void;
 
 use winisland_plugin_api::abi::{CAP_LYRICS, PluginStatus};
-use winisland_plugin_api::types::v2::lyrics::LyricsTransformerDataV2;
+use winisland_plugin_api::types::v2::lyrics::{
+    LYRICS_TRANSFORMER_FLAG_SECONDARY, LyricsTransformerDataV2,
+};
 use winisland_plugin_api::types::v2::{PluginToken, ResourceId};
 
 use super::{read_struct, runtime};
@@ -27,7 +29,7 @@ pub unsafe extern "C" fn register(
     if let Err(status) = host.registry.require(token, CAP_LYRICS) {
         return status;
     }
-    if data.flags != 0 {
+    if data.flags & !LYRICS_TRANSFORMER_FLAG_SECONDARY != 0 {
         return PluginStatus::InvalidArgument;
     }
     let Some(on_transform) = data.on_transform else {
@@ -41,11 +43,18 @@ pub unsafe extern "C" fn register(
         let _ = host.resources.release(token, ResourceKind::Lyrics, id);
         return PluginStatus::Internal;
     };
+    let secondary = data.flags & LYRICS_TRANSFORMER_FLAG_SECONDARY != 0;
+    let Ok(mut kinds) = host.lyrics_kinds.lock() else {
+        let _ = host.resources.release(token, ResourceKind::Lyrics, id);
+        return PluginStatus::Internal;
+    };
+    kinds.insert(id, (token, secondary));
     state.lyrics.insert(
         id,
         LyricsRecord {
             on_transform,
             callback_data: data.callback_data as usize,
+            secondary,
             in_flight: 0,
         },
     );
@@ -90,5 +99,8 @@ pub unsafe extern "C" fn release(
         return status;
     }
     state.lyrics.remove(&id.get());
+    if let Ok(mut kinds) = host.lyrics_kinds.lock() {
+        kinds.remove(&id.get());
+    }
     PluginStatus::Ok
 }

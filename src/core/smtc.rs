@@ -1,10 +1,12 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use pollkit::Job;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
+use winisland_core::config::AppConfig;
 use winisland_core::lyrics::{
     LyricHighlight, LyricLine, LyricsMode, fetch_online_lyrics, load_local_lyrics,
 };
@@ -176,6 +178,7 @@ pub struct SmtcListener {
     lyrics_mode_tx: mpsc::UnboundedSender<LyricsMode>,
     lyrics_source_tx: mpsc::UnboundedSender<String>,
     lyrics_local_dir_tx: mpsc::UnboundedSender<Option<String>>,
+    show_secondary_lyrics_tx: mpsc::UnboundedSender<bool>,
     allowed_apps_tx: mpsc::UnboundedSender<Vec<String>>,
     wake_tx: std::sync::mpsc::SyncSender<()>,
     cancel_token: CancellationToken,
@@ -183,14 +186,11 @@ pub struct SmtcListener {
 
 impl SmtcListener {
     pub fn new(
+        config: &AppConfig,
         enabled: bool,
-        mode: String,
-        source: String,
-        local_dir: Option<String>,
-        allowed: Vec<String>,
-        known_apps: Vec<String>,
         lyrics_bridge: Option<winisland_plugin_host::lifecycle::LyricsBridge>,
     ) -> Self {
+        let known_apps = config.smtc_known_apps.clone();
         let session_bridge = sessions::SessionBridge::default();
         let worker_sessions = session_bridge.clone();
         let (info_tx, info_rx) = watch::channel(MediaInfo::default());
@@ -200,14 +200,16 @@ impl SmtcListener {
         let (lyrics_mode_tx, lyrics_mode_rx) = mpsc::unbounded_channel();
         let (lyrics_source_tx, lyrics_source_rx) = mpsc::unbounded_channel();
         let (lyrics_local_dir_tx, lyrics_local_dir_rx) = mpsc::unbounded_channel();
+        let (show_secondary_lyrics_tx, show_secondary_lyrics_rx) = mpsc::unbounded_channel();
         let (allowed_apps_tx, allowed_apps_rx) = mpsc::unbounded_channel();
         let (wake_tx, wake_rx) = std::sync::mpsc::sync_channel(1);
         let cancel_token = CancellationToken::new();
 
-        let _ = lyrics_mode_tx.send(mode.as_str().into());
-        let _ = lyrics_source_tx.send(source);
-        let _ = lyrics_local_dir_tx.send(local_dir);
-        let _ = allowed_apps_tx.send(allowed);
+        let _ = lyrics_mode_tx.send(config.lyrics_mode.as_str().into());
+        let _ = lyrics_source_tx.send(config.lyrics_source.clone());
+        let _ = lyrics_local_dir_tx.send(config.lyrics_local_dir.clone());
+        let _ = show_secondary_lyrics_tx.send(config.show_secondary_lyrics);
+        let _ = allowed_apps_tx.send(config.smtc_apps.clone());
 
         let cancel = cancel_token.clone();
         let worker_info_tx = info_tx.clone();
@@ -222,6 +224,7 @@ impl SmtcListener {
                     lyrics_mode_rx,
                     lyrics_source_rx,
                     lyrics_local_dir_rx,
+                    show_secondary_lyrics_rx,
                     allowed_apps_rx,
                     wake_rx,
                     known_apps,
@@ -241,6 +244,7 @@ impl SmtcListener {
             lyrics_mode_tx,
             lyrics_source_tx,
             lyrics_local_dir_tx,
+            show_secondary_lyrics_tx,
             allowed_apps_tx,
             wake_tx,
             cancel_token,
@@ -291,6 +295,10 @@ impl SmtcListener {
         let _ = self.lyrics_local_dir_tx.send(dir);
     }
 
+    pub fn set_show_secondary_lyrics(&self, show: bool) {
+        let _ = self.show_secondary_lyrics_tx.send(show);
+    }
+
     pub fn take_info_if_changed(&mut self) -> Option<MediaInfo> {
         self.info_rx
             .has_changed()
@@ -338,6 +346,7 @@ impl SmtcListener {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct LyricsFetchRequest {
     pub(super) title: String,
     pub(super) artist: String,
@@ -345,6 +354,7 @@ pub(super) struct LyricsFetchRequest {
     pub(super) mode: LyricsMode,
     pub(super) source: String,
     pub(super) local_dir: Option<String>,
+    pub(super) show_secondary: bool,
     pub(super) request_id: u64,
     pub(super) track_id: u64,
 }
@@ -354,6 +364,7 @@ pub(super) struct LyricsFetchConfig<'a> {
     pub(super) mode: LyricsMode,
     pub(super) source: &'a str,
     pub(super) local_dir: Option<&'a str>,
+    pub(super) show_secondary: bool,
     pub(super) bridge: Option<&'a winisland_plugin_host::lifecycle::LyricsBridge>,
 }
 
@@ -363,6 +374,16 @@ impl LyricsFetchRequest {
             && media.artist == self.artist
             && media.lyrics_fetch_id == self.request_id
             && media.track_id == self.track_id
+    }
+}
+
+/// Tells a running lyrics annotation to stop once the fetch that started it is dropped, for
+/// example because the track changed.
+struct CancelOnDrop(Arc<AtomicBool>);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
     }
 }
 
@@ -377,6 +398,7 @@ pub(super) fn spawn_lyrics_fetch(
         if !request.matches(&media_changes.borrow()) {
             return;
         }
+        let annotate_bridge = lyrics_bridge.clone();
         let fetch = async {
             let lyrics = if request.mode == LyricsMode::Lrc {
                 let local_dir = request
@@ -405,13 +427,53 @@ pub(super) fn spawn_lyrics_fetch(
                 )
                 .await
             };
-            match (lyrics, lyrics_bridge) {
+            let lyrics = match (lyrics, lyrics_bridge) {
                 (Some(lyrics), Some(bridge)) => {
                     tokio::task::spawn_blocking(move || bridge.apply(lyrics))
                         .await
                         .ok()
                 }
                 (lyrics, _) => lyrics,
+            };
+            let lyrics = lyrics?;
+            let Some(bridge) = annotate_bridge.filter(|bridge| bridge.has_secondary()) else {
+                return Some(lyrics);
+            };
+            if !request.show_secondary {
+                return Some(lyrics);
+            }
+            // A provider translation may be in another language than a secondary-text plugin
+            // produces, so it stays hidden while plugins run and returns only if none answers.
+            let mut stripped = lyrics.clone();
+            for line in Arc::make_mut(&mut stripped) {
+                line.secondary_text = None;
+            }
+            let publish = {
+                let info_tx = info_tx.clone();
+                let request = request.clone();
+                move |lyrics: &Arc<Vec<LyricLine>>| {
+                    info_tx.send_if_modified(|current| {
+                        if !request.matches(current) {
+                            return false;
+                        }
+                        current.lyrics = Some(lyrics.clone());
+                        true
+                    });
+                }
+            };
+            // Show the lines at once; a plugin may need a while for the whole song.
+            publish(&stripped);
+            let cancel = CancelOnDrop(Arc::new(AtomicBool::new(false)));
+            let cancelled = cancel.0.clone();
+            match tokio::task::spawn_blocking(move || {
+                bridge.annotate(stripped, &cancelled, publish)
+            })
+            .await
+            {
+                Ok(annotated) if annotated.iter().any(|line| line.secondary_text.is_some()) => {
+                    Some(annotated)
+                }
+                _ => Some(lyrics),
             }
         };
         let lyrics = tokio::select! {

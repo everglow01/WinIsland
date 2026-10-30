@@ -24,12 +24,13 @@ use crate::runtime::HostRuntime;
 mod lyrics;
 pub use lyrics::LyricsBridge;
 
+/// Matches the limit the host gives other plugin calls.
+const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
+
 enum WorkerEvent {
     LyricsTransform {
         token: PluginToken,
-        time_ms: u64,
-        word_synced: bool,
-        text: String,
+        request: lyrics::TransformRequest,
         response: Sender<Result<String, PluginStatus>>,
     },
     MediaCommand {
@@ -186,6 +187,11 @@ impl PluginInstance {
                     let mut next_tick = previous;
                     while !stop.load(Ordering::Acquire) {
                         for _ in 0..256 {
+                            // Events queued behind a long lyrics call are dropped once shutdown
+                            // starts instead of delaying it.
+                            if stop.load(Ordering::Acquire) {
+                                break;
+                            }
                             let Ok(event) = event_rx.try_recv() else {
                                 break;
                             };
@@ -372,6 +378,18 @@ impl PluginInstance {
         self.event_tx.take();
         if let Some(worker) = &self.worker {
             worker.thread().unpark();
+            // A secondary lyrics call may run for minutes and cannot be interrupted. Shutdown
+            // usually runs on the UI thread, so it fails instead of freezing the window; the
+            // plugin stays loaded and a later shutdown succeeds once the call has returned.
+            let deadline = Instant::now() + SHUTDOWN_WAIT;
+            while !worker.is_finished() {
+                if Instant::now() >= deadline {
+                    return Err(PluginHostError::Worker(
+                        "plugin is still running a call; try again once it returns".into(),
+                    ));
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
         }
         if let Some(worker) = self.worker.take() {
             worker.join().map_err(|_| {
@@ -400,18 +418,11 @@ fn dispatch_event(runtime: &HostRuntime, identity: &Arc<PluginIdentity>, event: 
     match event {
         WorkerEvent::LyricsTransform {
             token,
-            time_ms,
-            word_synced,
-            text,
+            request,
             response,
         } => {
             let _ = response.send(lyrics::dispatch_transform(
-                runtime,
-                identity,
-                token,
-                time_ms,
-                word_synced,
-                text,
+                runtime, identity, token, &request,
             ));
         }
         WorkerEvent::MediaCommand {
