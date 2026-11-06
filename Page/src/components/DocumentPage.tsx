@@ -3,8 +3,9 @@ import { BookOpen, ChevronDown, ChevronRight } from 'lucide-react'
 import dos from 'highlight.js/lib/languages/dos'
 import powershell from 'highlight.js/lib/languages/powershell'
 import ReactMarkdown from 'react-markdown'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import rehypeHighlight from 'rehype-highlight'
+import rehypeSlug from 'rehype-slug'
 import { common } from 'lowlight'
 import remarkGfm from 'remark-gfm'
 import { copy, DOC_KEYS, localePath, type DocKey, type Locale } from '../content'
@@ -27,12 +28,36 @@ const syntaxHighlighting: RehypePlugin = [
   },
 ]
 
-export default function DocumentPage({ locale, page }: { locale: Locale; page: DocKey }) {
+export default function DocumentPage({ locale, page }: { locale: Locale; page: Exclude<DocKey, 'download'> }) {
   const text = copy[locale]
-  const markdown = docs[locale][page]
+  const location = useLocation()
+  const [markdown, setMarkdown] = useState<string>()
+  const [loadFailed, setLoadFailed] = useState(false)
   const [navigationOpen, setNavigationOpen] = useState(false)
   const navigationRef = useRef<HTMLElement>(null)
   const activePageRef = useRef<HTMLAnchorElement>(null)
+
+  useEffect(() => {
+    let active = true
+    setMarkdown(undefined)
+    setLoadFailed(false)
+    docs[locale][page]().then(
+      (document) => { if (active) setMarkdown(document.default) },
+      () => { if (active) setLoadFailed(true) },
+    )
+    return () => { active = false }
+  }, [locale, page])
+
+  useEffect(() => {
+    if (markdown === undefined || !location.hash) return
+    let anchor: string
+    try {
+      anchor = decodeURIComponent(location.hash.slice(1))
+    } catch {
+      return
+    }
+    document.getElementById(`doc-${anchor}`)?.scrollIntoView()
+  }, [markdown, location.hash, location.key])
 
   useEffect(() => {
     const navigation = navigationRef.current
@@ -63,13 +88,16 @@ export default function DocumentPage({ locale, page }: { locale: Locale; page: D
             </a>
           )
         }
+        if (href.startsWith('#')) {
+          return <Link to={{ pathname: location.pathname, search: location.search, hash: href }}>{children}</Link>
+        }
         const normalized = href.startsWith('/zh/')
           ? href
           : localePath(locale, href.startsWith('/') ? href : `/${href}`)
         return <Link to={normalized}>{children}</Link>
       },
     }),
-    [locale],
+    [locale, location.pathname, location.search],
   )
 
   return (
@@ -112,13 +140,19 @@ export default function DocumentPage({ locale, page }: { locale: Locale; page: D
           <ChevronRight size={14} />
           {text.docs.pages[page]}
         </div>
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          rehypePlugins={[syntaxHighlighting]}
-          components={markdownComponents}
-        >
-          {markdown}
-        </ReactMarkdown>
+        {loadFailed ? (
+          <p role="alert">{text.docs.loadError}</p>
+        ) : markdown === undefined ? (
+          <div className="docs-loading" aria-busy="true"><span /></div>
+        ) : (
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            rehypePlugins={[[rehypeSlug, { prefix: 'doc-' }], syntaxHighlighting]}
+            components={markdownComponents}
+          >
+            {markdown}
+          </ReactMarkdown>
+        )}
       </article>
     </div>
   )

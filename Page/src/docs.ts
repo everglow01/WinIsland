@@ -1,131 +1,68 @@
-import apiChangelogEn from '../../crates/winisland-plugin-api/ChangeLog.md?raw'
-import downloadEn from '../download.md?raw'
-import faqEn from '../faq.md?raw'
-import gettingStartedEn from '../getting-started.md?raw'
-import guideEn from '../guide.md?raw'
-import pluginEn from '../plugin-dev.md?raw'
-import pluginAbiEn from '../plugin-dev/abi-lifecycle.md?raw'
-import pluginPackagingEn from '../plugin-dev/packaging.md?raw'
-import pluginQuickstartEn from '../plugin-dev/quickstart.md?raw'
-import pluginServicesEn from '../plugin-dev/services.md?raw'
-import pluginApiEn from '../plugin-dev/api.md?raw'
-import pluginApiContextEn from '../plugin-dev/api/context.md?raw'
-import pluginApiActivityEn from '../plugin-dev/api/activity.md?raw'
-import pluginApiSystemEn from '../plugin-dev/api/system.md?raw'
-import pluginApiDrawingEn from '../plugin-dev/api/drawing.md?raw'
-import pluginApiMediaEn from '../plugin-dev/api/media.md?raw'
-import pluginApiI18nEn from '../plugin-dev/api/i18n.md?raw'
-import pluginApiHostStateEn from '../plugin-dev/api/host-state.md?raw'
-import pluginApiWidgetEn from '../plugin-dev/api/widget.md?raw'
-import pluginApiSurfaceEn from '../plugin-dev/api/surface.md?raw'
-import pluginApiInputEn from '../plugin-dev/api/input.md?raw'
-import pluginApiEventsEn from '../plugin-dev/api/events.md?raw'
-import pluginApiCommandEn from '../plugin-dev/api/command.md?raw'
-import pluginApiMediaSessionEn from '../plugin-dev/api/media-session.md?raw'
-import pluginApiLyricsEn from '../plugin-dev/api/lyrics-transform.md?raw'
-import pluginApiSettingsEn from '../plugin-dev/api/settings.md?raw'
-import pluginApiTextEn from '../plugin-dev/api/text.md?raw'
-import pluginApiImageEn from '../plugin-dev/api/image.md?raw'
-import pluginApiStoreEn from '../plugin-dev/api/store.md?raw'
-import pluginApiLogEn from '../plugin-dev/api/log.md?raw'
-import apiChangelogZh from '../zh/api-changelog.md?raw'
-import downloadZh from '../zh/download.md?raw'
-import gettingStartedZh from '../zh/getting-started.md?raw'
-import guideZh from '../zh/guide.md?raw'
-import faqZh from '../zh/faq.md?raw'
-import pluginZh from '../zh/plugin-dev.md?raw'
-import pluginAbiZh from '../zh/plugin-dev/abi-lifecycle.md?raw'
-import pluginPackagingZh from '../zh/plugin-dev/packaging.md?raw'
-import pluginQuickstartZh from '../zh/plugin-dev/quickstart.md?raw'
-import pluginServicesZh from '../zh/plugin-dev/services.md?raw'
-import pluginApiZh from '../zh/plugin-dev/api.md?raw'
-import pluginApiContextZh from '../zh/plugin-dev/api/context.md?raw'
-import pluginApiActivityZh from '../zh/plugin-dev/api/activity.md?raw'
-import pluginApiSystemZh from '../zh/plugin-dev/api/system.md?raw'
-import pluginApiDrawingZh from '../zh/plugin-dev/api/drawing.md?raw'
-import pluginApiMediaZh from '../zh/plugin-dev/api/media.md?raw'
-import pluginApiI18nZh from '../zh/plugin-dev/api/i18n.md?raw'
-import pluginApiHostStateZh from '../zh/plugin-dev/api/host-state.md?raw'
-import pluginApiWidgetZh from '../zh/plugin-dev/api/widget.md?raw'
-import pluginApiSurfaceZh from '../zh/plugin-dev/api/surface.md?raw'
-import pluginApiInputZh from '../zh/plugin-dev/api/input.md?raw'
-import pluginApiEventsZh from '../zh/plugin-dev/api/events.md?raw'
-import pluginApiCommandZh from '../zh/plugin-dev/api/command.md?raw'
-import pluginApiMediaSessionZh from '../zh/plugin-dev/api/media-session.md?raw'
-import pluginApiLyricsZh from '../zh/plugin-dev/api/lyrics-transform.md?raw'
-import pluginApiSettingsZh from '../zh/plugin-dev/api/settings.md?raw'
-import pluginApiTextZh from '../zh/plugin-dev/api/text.md?raw'
-import pluginApiImageZh from '../zh/plugin-dev/api/image.md?raw'
-import pluginApiStoreZh from '../zh/plugin-dev/api/store.md?raw'
-import pluginApiLogZh from '../zh/plugin-dev/api/log.md?raw'
-import changelogEn from '../../Changelog.md?raw'
-import changelogZh from '../../Changelog-zh.md?raw'
+import type { DocKey, Locale } from './content'
 
 export const docs = {
   en: {
-    guide: guideEn,
-    faq: faqEn,
-    'getting-started': gettingStartedEn,
-    download: downloadEn,
-    'plugin-dev': pluginEn,
-    'plugin-dev/quickstart': pluginQuickstartEn,
-    'plugin-dev/abi-lifecycle': pluginAbiEn,
-    'plugin-dev/services': pluginServicesEn,
-    'plugin-dev/api': pluginApiEn,
-    'plugin-dev/api/context': pluginApiContextEn,
-    'plugin-dev/api/activity': pluginApiActivityEn,
-    'plugin-dev/api/system': pluginApiSystemEn,
-    'plugin-dev/api/drawing': pluginApiDrawingEn,
-    'plugin-dev/api/media': pluginApiMediaEn,
-    'plugin-dev/api/i18n': pluginApiI18nEn,
-    'plugin-dev/api/host-state': pluginApiHostStateEn,
-    'plugin-dev/api/widget': pluginApiWidgetEn,
-    'plugin-dev/api/surface': pluginApiSurfaceEn,
-    'plugin-dev/api/input': pluginApiInputEn,
-    'plugin-dev/api/events': pluginApiEventsEn,
-    'plugin-dev/api/command': pluginApiCommandEn,
-    'plugin-dev/api/media-session': pluginApiMediaSessionEn,
-    'plugin-dev/api/lyrics-transform': pluginApiLyricsEn,
-    'plugin-dev/api/settings': pluginApiSettingsEn,
-    'plugin-dev/api/text': pluginApiTextEn,
-    'plugin-dev/api/image': pluginApiImageEn,
-    'plugin-dev/api/store': pluginApiStoreEn,
-    'plugin-dev/api/log': pluginApiLogEn,
-    'plugin-dev/packaging': pluginPackagingEn,
-    'api-changelog': apiChangelogEn,
-    changelog: changelogEn,
+    guide: () => import('../guide.md?raw'),
+    faq: () => import('../faq.md?raw'),
+    'getting-started': () => import('../getting-started.md?raw'),
+    'plugin-dev': () => import('../plugin-dev.md?raw'),
+    'plugin-dev/quickstart': () => import('../plugin-dev/quickstart.md?raw'),
+    'plugin-dev/abi-lifecycle': () => import('../plugin-dev/abi-lifecycle.md?raw'),
+    'plugin-dev/services': () => import('../plugin-dev/services.md?raw'),
+    'plugin-dev/api': () => import('../plugin-dev/api.md?raw'),
+    'plugin-dev/api/context': () => import('../plugin-dev/api/context.md?raw'),
+    'plugin-dev/api/activity': () => import('../plugin-dev/api/activity.md?raw'),
+    'plugin-dev/api/system': () => import('../plugin-dev/api/system.md?raw'),
+    'plugin-dev/api/drawing': () => import('../plugin-dev/api/drawing.md?raw'),
+    'plugin-dev/api/media': () => import('../plugin-dev/api/media.md?raw'),
+    'plugin-dev/api/i18n': () => import('../plugin-dev/api/i18n.md?raw'),
+    'plugin-dev/api/host-state': () => import('../plugin-dev/api/host-state.md?raw'),
+    'plugin-dev/api/widget': () => import('../plugin-dev/api/widget.md?raw'),
+    'plugin-dev/api/surface': () => import('../plugin-dev/api/surface.md?raw'),
+    'plugin-dev/api/input': () => import('../plugin-dev/api/input.md?raw'),
+    'plugin-dev/api/events': () => import('../plugin-dev/api/events.md?raw'),
+    'plugin-dev/api/command': () => import('../plugin-dev/api/command.md?raw'),
+    'plugin-dev/api/media-session': () => import('../plugin-dev/api/media-session.md?raw'),
+    'plugin-dev/api/lyrics-transform': () => import('../plugin-dev/api/lyrics-transform.md?raw'),
+    'plugin-dev/api/settings': () => import('../plugin-dev/api/settings.md?raw'),
+    'plugin-dev/api/text': () => import('../plugin-dev/api/text.md?raw'),
+    'plugin-dev/api/image': () => import('../plugin-dev/api/image.md?raw'),
+    'plugin-dev/api/store': () => import('../plugin-dev/api/store.md?raw'),
+    'plugin-dev/api/log': () => import('../plugin-dev/api/log.md?raw'),
+    'plugin-dev/packaging': () => import('../plugin-dev/packaging.md?raw'),
+    'api-changelog': () => import('../../crates/winisland-plugin-api/ChangeLog.md?raw'),
+    changelog: () => import('../../Changelog.md?raw'),
   },
   zh: {
-    guide: guideZh,
-    faq: faqZh,
-    'getting-started': gettingStartedZh,
-    download: downloadZh,
-    'plugin-dev': pluginZh,
-    'plugin-dev/quickstart': pluginQuickstartZh,
-    'plugin-dev/abi-lifecycle': pluginAbiZh,
-    'plugin-dev/services': pluginServicesZh,
-    'plugin-dev/api': pluginApiZh,
-    'plugin-dev/api/context': pluginApiContextZh,
-    'plugin-dev/api/activity': pluginApiActivityZh,
-    'plugin-dev/api/system': pluginApiSystemZh,
-    'plugin-dev/api/drawing': pluginApiDrawingZh,
-    'plugin-dev/api/media': pluginApiMediaZh,
-    'plugin-dev/api/i18n': pluginApiI18nZh,
-    'plugin-dev/api/host-state': pluginApiHostStateZh,
-    'plugin-dev/api/widget': pluginApiWidgetZh,
-    'plugin-dev/api/surface': pluginApiSurfaceZh,
-    'plugin-dev/api/input': pluginApiInputZh,
-    'plugin-dev/api/events': pluginApiEventsZh,
-    'plugin-dev/api/command': pluginApiCommandZh,
-    'plugin-dev/api/media-session': pluginApiMediaSessionZh,
-    'plugin-dev/api/lyrics-transform': pluginApiLyricsZh,
-    'plugin-dev/api/settings': pluginApiSettingsZh,
-    'plugin-dev/api/text': pluginApiTextZh,
-    'plugin-dev/api/image': pluginApiImageZh,
-    'plugin-dev/api/store': pluginApiStoreZh,
-    'plugin-dev/api/log': pluginApiLogZh,
-    'plugin-dev/packaging': pluginPackagingZh,
-    'api-changelog': apiChangelogZh,
-    changelog: changelogZh,
+    guide: () => import('../zh/guide.md?raw'),
+    faq: () => import('../zh/faq.md?raw'),
+    'getting-started': () => import('../zh/getting-started.md?raw'),
+    'plugin-dev': () => import('../zh/plugin-dev.md?raw'),
+    'plugin-dev/quickstart': () => import('../zh/plugin-dev/quickstart.md?raw'),
+    'plugin-dev/abi-lifecycle': () => import('../zh/plugin-dev/abi-lifecycle.md?raw'),
+    'plugin-dev/services': () => import('../zh/plugin-dev/services.md?raw'),
+    'plugin-dev/api': () => import('../zh/plugin-dev/api.md?raw'),
+    'plugin-dev/api/context': () => import('../zh/plugin-dev/api/context.md?raw'),
+    'plugin-dev/api/activity': () => import('../zh/plugin-dev/api/activity.md?raw'),
+    'plugin-dev/api/system': () => import('../zh/plugin-dev/api/system.md?raw'),
+    'plugin-dev/api/drawing': () => import('../zh/plugin-dev/api/drawing.md?raw'),
+    'plugin-dev/api/media': () => import('../zh/plugin-dev/api/media.md?raw'),
+    'plugin-dev/api/i18n': () => import('../zh/plugin-dev/api/i18n.md?raw'),
+    'plugin-dev/api/host-state': () => import('../zh/plugin-dev/api/host-state.md?raw'),
+    'plugin-dev/api/widget': () => import('../zh/plugin-dev/api/widget.md?raw'),
+    'plugin-dev/api/surface': () => import('../zh/plugin-dev/api/surface.md?raw'),
+    'plugin-dev/api/input': () => import('../zh/plugin-dev/api/input.md?raw'),
+    'plugin-dev/api/events': () => import('../zh/plugin-dev/api/events.md?raw'),
+    'plugin-dev/api/command': () => import('../zh/plugin-dev/api/command.md?raw'),
+    'plugin-dev/api/media-session': () => import('../zh/plugin-dev/api/media-session.md?raw'),
+    'plugin-dev/api/lyrics-transform': () => import('../zh/plugin-dev/api/lyrics-transform.md?raw'),
+    'plugin-dev/api/settings': () => import('../zh/plugin-dev/api/settings.md?raw'),
+    'plugin-dev/api/text': () => import('../zh/plugin-dev/api/text.md?raw'),
+    'plugin-dev/api/image': () => import('../zh/plugin-dev/api/image.md?raw'),
+    'plugin-dev/api/store': () => import('../zh/plugin-dev/api/store.md?raw'),
+    'plugin-dev/api/log': () => import('../zh/plugin-dev/api/log.md?raw'),
+    'plugin-dev/packaging': () => import('../zh/plugin-dev/packaging.md?raw'),
+    'api-changelog': () => import('../zh/api-changelog.md?raw'),
+    changelog: () => import('../../Changelog-zh.md?raw'),
   },
-} as const
+} satisfies Record<Locale, Record<Exclude<DocKey, 'download'>, () => Promise<{ default: string }>>>

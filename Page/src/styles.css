@@ -392,6 +392,8 @@ img, svg { display: block; }
 .channel-label { display: inline-flex; align-items: center; gap: 7px; color: var(--blue); font-size: 13px; font-weight: 650; }
 .channel-card h2 { margin: 26px 0 0; font-size: 32px; font-weight: 680; line-height: 1.08; letter-spacing: -.04em; }
 .channel-card p { flex: 1; margin: 14px 0 27px; color: var(--muted); font-size: 16px; line-height: 1.5; }
+.channel-downloads { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
+.channel-downloads > a:last-child { color: var(--blue); font-size: 14px; text-decoration: underline; text-underline-offset: 3px; }
 .requirements-panel {
   display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; overflow: hidden; margin-top: 20px;
   border: 1px solid var(--hairline); border-radius: 22px; background: var(--hairline);

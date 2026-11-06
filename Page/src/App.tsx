@@ -6,8 +6,6 @@ import {
   useLayoutEffect,
   useRef,
   useState,
-  type ComponentProps,
-  type MouseEvent,
 } from 'react'
 import { App as KonstaApp, Button, Segmented, SegmentedButton } from 'konsta/react'
 import { LiquidGlass } from '@sohumsuthar/liquid-glass'
@@ -101,85 +99,6 @@ function useSiteTheme() {
   return { theme, toggle }
 }
 
-const DOWNLOAD_PROBE_TIMEOUT = 2500
-const DOWNLOAD_PROBES = {
-  mirror: 'https://winisland.cn/WinIsland/probe.bin',
-  github: 'https://raw.githubusercontent.com/WinIslandProject/WinIsland/master/README.md',
-} as const
-const DOWNLOAD_MIRRORS: Record<string, string> = {
-  [DOWNLOAD_RELEASE]: 'https://winisland.cn/WinIsland/download/stable',
-  [DOWNLOAD_NIGHTLY]: 'https://winisland.cn/WinIsland/download/nightly',
-}
-
-const measureDownloadSource = (url: string) =>
-  new Promise<number>((resolve) => {
-    const controller = new AbortController()
-    const started = performance.now()
-    let settled = false
-    let timeout = 0
-
-    const finish = (duration: number) => {
-      if (settled) return
-      settled = true
-      window.clearTimeout(timeout)
-      resolve(duration)
-    }
-
-    timeout = window.setTimeout(() => {
-      controller.abort()
-      finish(Infinity)
-    }, DOWNLOAD_PROBE_TIMEOUT)
-
-    const separator = url.includes('?') ? '&' : '?'
-    fetch(`${url}${separator}probe=${Date.now()}`, {
-      cache: 'no-store',
-      mode: 'no-cors',
-      signal: controller.signal,
-    }).then(
-      () => finish(performance.now() - started),
-      () => finish(Infinity),
-    )
-  })
-
-const resolveDownloadUrl = async (source: string) => {
-  const mirror = DOWNLOAD_MIRRORS[source]
-  if (!mirror) return source
-
-  const [mirrorDuration, githubDuration] = await Promise.all([
-    measureDownloadSource(DOWNLOAD_PROBES.mirror),
-    measureDownloadSource(DOWNLOAD_PROBES.github),
-  ])
-
-  return Number.isFinite(mirrorDuration) && mirrorDuration <= githubDuration ? mirror : source
-}
-
-type RoutedDownloadButtonProps = Omit<ComponentProps<typeof Button>, 'href' | 'onClick'> & {
-  href: string
-}
-
-function RoutedDownloadButton({ href, ...props }: RoutedDownloadButtonProps) {
-  const routing = useRef(false)
-
-  const handleClick = useCallback(
-    (event: MouseEvent<HTMLButtonElement>) => {
-      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
-
-      event.preventDefault()
-      if (routing.current) return
-      routing.current = true
-
-      void resolveDownloadUrl(href)
-        .then((target) => window.location.assign(target))
-        .finally(() => {
-          routing.current = false
-        })
-    },
-    [href],
-  )
-
-  return <Button {...props} href={href} onClick={handleClick} />
-}
-
 const pageFromPath = (pathname: string) => {
   const cleanPath = pathname.replace(/^\/zh(?=\/|$)/, '') || '/'
   if (cleanPath === '/') return 'home' as const
@@ -220,7 +139,7 @@ function Site() {
           {page === 'download' && <DownloadPage locale={locale} />}
           {page !== 'home' && page !== 'download' && page !== 'not-found' && (
             <Suspense fallback={<div className="docs-loading page-top section-shell" aria-busy="true"><span /></div>}>
-              <DocumentPage locale={locale} page={page} />
+              <DocumentPage key={`${locale}/${page}`} locale={locale} page={page} />
             </Suspense>
           )}
           {page === 'not-found' && <NotFound locale={locale} />}
@@ -586,9 +505,9 @@ function DownloadSection({ locale }: { locale: Locale }) {
         <h2>{text.title}</h2>
         <p>{text.body}</p>
         <div className="download-actions">
-          <RoutedDownloadButton className="apple-button apple-button--white" rounded large href={DOWNLOAD_RELEASE}>
+          <Button className="apple-button apple-button--white" rounded large href={DOWNLOAD_RELEASE}>
             <Download size={18} />{text.stable}
-          </RoutedDownloadButton>
+          </Button>
           <Link to={localePath(locale, '/download')}>{text.nightly}<ArrowRight size={16} /></Link>
         </div>
       </div>
@@ -609,17 +528,23 @@ function DownloadPage({ locale }: { locale: Locale }) {
           <span className="channel-label"><BadgeCheck size={17} />Stable</span>
           <h2>{text.stable}</h2>
           <p>{locale === 'zh' ? '适合大多数用户的稳定版本。' : 'The stable build recommended for most people.'}</p>
-          <RoutedDownloadButton className="apple-button apple-button--primary" rounded large href={DOWNLOAD_RELEASE}>
-            <Download size={18} />{text.stable}
-          </RoutedDownloadButton>
+          <div className="channel-downloads">
+            <Button className="apple-button apple-button--primary" rounded large href={DOWNLOAD_RELEASE}>
+              <Download size={18} />{text.stable}
+            </Button>
+            <a href="https://winisland.cn/WinIsland/download/stable">{text.mirror}</a>
+          </div>
         </LiquidGlass>
         <LiquidGlass macro className="channel-card" contentClassName="channel-card-content">
           <span className="channel-label"><Sparkles size={17} />Nightly</span>
           <h2>{text.nightly}</h2>
           <p>{text.nightlyHint}</p>
-          <RoutedDownloadButton className="apple-button apple-button--secondary" rounded large tonal href={DOWNLOAD_NIGHTLY}>
-            <Download size={18} />{text.nightly}
-          </RoutedDownloadButton>
+          <div className="channel-downloads">
+            <Button className="apple-button apple-button--secondary" rounded large tonal href={DOWNLOAD_NIGHTLY}>
+              <Download size={18} />{text.nightly}
+            </Button>
+            <a href="https://winisland.cn/WinIsland/download/nightly">{text.mirror}</a>
+          </div>
         </LiquidGlass>
       </div>
       <div className="requirements-panel">

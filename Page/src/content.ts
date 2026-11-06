@@ -137,6 +137,7 @@ export const copy = {
       body: 'For Windows 10 version 2004 or later and Windows 11. 64-bit only.',
       stable: 'Download latest release',
       nightly: 'Get nightly build',
+      mirror: 'Download from mirror',
       nightlyHint: 'Nightly builds include the newest changes and may be less stable.',
     },
     footer: {
@@ -149,6 +150,7 @@ export const copy = {
       title: 'WinIsland Guide',
       subtitle: 'Everything you need to install, use, and extend WinIsland.',
       onThisPage: 'Documentation',
+      loadError: 'This document could not be loaded. Refresh the page to try again.',
       pages: {
         guide: 'What is WinIsland?',
         faq: 'Thoughts & FAQ',
@@ -252,6 +254,7 @@ export const copy = {
       body: '支持 Windows 10 2004 及以上版本与 Windows 11，仅支持 64 位系统。',
       stable: '下载最新正式版',
       nightly: '获取每日预览版',
+      mirror: '镜像下载',
       nightlyHint: '预览版包含最新改动，但稳定性可能不如正式版。',
     },
     footer: {
@@ -264,6 +267,7 @@ export const copy = {
       title: 'WinIsland 指南',
       subtitle: '安装、使用与扩展 WinIsland 所需的一切。',
       onThisPage: '文档目录',
+      loadError: '文档加载失败，请刷新页面重试。',
       pages: {
         guide: '什么是 WinIsland？',
         faq: '想法与常见问题',
