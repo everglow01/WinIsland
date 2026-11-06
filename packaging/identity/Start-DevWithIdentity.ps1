@@ -12,6 +12,9 @@ $env:WINISLAND_DEV_TARGET_DIR = $targetDirectory
 Push-Location $repositoryRoot
 try {
     cargo build --target-dir $targetDirectory
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Cargo failed to build WinIsland.'
+    }
     & (Join-Path $PSScriptRoot 'Register-DevIdentity.ps1')
     Start-Process (Join-Path $targetDirectory 'debug\WinIsland.exe')
 } finally {

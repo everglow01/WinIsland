@@ -65,7 +65,12 @@ if ($LASTEXITCODE -ne 0) {
     throw 'MakeAppx failed to build the identity package.'
 }
 
-& $signTool sign /fd SHA256 /f $CertificatePath /p $CertificatePassword $packagePath
+$signArguments = @('sign', '/fd', 'SHA256')
+if ($Channel -ne 'dev') {
+    $signArguments += @('/tr', 'http://timestamp.digicert.com', '/td', 'SHA256')
+}
+$signArguments += @('/f', $CertificatePath, '/p', $CertificatePassword, $packagePath)
+& $signTool @signArguments
 if ($LASTEXITCODE -ne 0) {
     throw 'SignTool failed to sign the identity package.'
 }

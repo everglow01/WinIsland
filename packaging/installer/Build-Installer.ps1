@@ -104,7 +104,7 @@ $installerName = if ($Channel -eq 'stable') {
 }
 $installerPath = Join-Path $installerOutput $installerName
 $signTool = Get-SignTool
-& $signTool sign /fd SHA256 /f $CertificatePath /p $CertificatePassword $installerPath
+& $signTool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f $CertificatePath /p $CertificatePassword $installerPath
 if ($LASTEXITCODE -ne 0) {
     throw 'SignTool failed to sign the installer.'
 }
