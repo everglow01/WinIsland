@@ -3,7 +3,6 @@ import type { DocKey, Locale } from './content'
 export const docs = {
   en: {
     guide: () => import('../guide.md?raw'),
-    faq: () => import('../faq.md?raw'),
     'getting-started': () => import('../getting-started.md?raw'),
     'plugin-dev': () => import('../plugin-dev.md?raw'),
     'plugin-dev/quickstart': () => import('../plugin-dev/quickstart.md?raw'),
@@ -35,7 +34,6 @@ export const docs = {
   },
   zh: {
     guide: () => import('../zh/guide.md?raw'),
-    faq: () => import('../zh/faq.md?raw'),
     'getting-started': () => import('../zh/getting-started.md?raw'),
     'plugin-dev': () => import('../zh/plugin-dev.md?raw'),
     'plugin-dev/quickstart': () => import('../zh/plugin-dev/quickstart.md?raw'),

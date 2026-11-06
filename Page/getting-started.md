@@ -16,5 +16,4 @@ Ready to experience WinIsland on your Windows desktop? Follow these simple steps
 ## Troubleshooting
 
 - **No Media Info?**: Ensure that your media player supports Windows SMTC (most browsers, Spotify, and modern music apps do).
-- **Incorrect Media Info in NetEase Cloud Music, Kugou, or Similar Apps?**: See the [FAQ](/faq) for each player's SMTC requirements.
 - **Blur not working?**: Check if your system supports hardware acceleration and if you have the latest graphics drivers installed.

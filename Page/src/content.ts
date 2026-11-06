@@ -2,7 +2,6 @@ export type Locale = 'en' | 'zh'
 export type DemoMode = 'media' | 'notification' | 'widgets'
 export type DocKey =
   | 'guide'
-  | 'faq'
   | 'getting-started'
   | 'download'
   | 'plugin-dev'
@@ -35,7 +34,6 @@ export type DocKey =
 
 export const DOC_KEYS: DocKey[] = [
   'guide',
-  'faq',
   'getting-started',
   'download',
   'plugin-dev',
@@ -153,7 +151,6 @@ export const copy = {
       loadError: 'This document could not be loaded. Refresh the page to try again.',
       pages: {
         guide: 'What is WinIsland?',
-        faq: 'Thoughts & FAQ',
         'getting-started': 'Getting started',
         download: 'Download',
         'plugin-dev': 'Plugin development',
@@ -270,7 +267,6 @@ export const copy = {
       loadError: '文档加载失败，请刷新页面重试。',
       pages: {
         guide: '什么是 WinIsland？',
-        faq: '想法与常见问题',
         'getting-started': '快速开始',
         download: '下载',
         'plugin-dev': '插件开发',
