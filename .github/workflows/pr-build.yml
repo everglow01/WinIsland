@@ -34,7 +34,7 @@ jobs:
         run: |
           changed=$(git diff --name-only "$BASE_SHA...HEAD")
           printf '%s\n' "$changed"
-          if printf '%s\n' "$changed" | grep -qE '\.rs$|(^|/)Cargo\.(toml|lock)$|^resources/'; then
+          if printf '%s\n' "$changed" | grep -E '\.(rs|sksl)$|(^|/)Cargo\.(toml|lock)$|^resources/|^\.github/workflows/pr-build\.yml$' > /dev/null; then
             echo "rust=true" >> "$GITHUB_OUTPUT"
           else
             echo "rust=false" >> "$GITHUB_OUTPUT"

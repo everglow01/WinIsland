@@ -25,22 +25,28 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.diff.outputs.rust }}
+      web: ${{ steps.diff.outputs.web }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Detect Rust changes
+      - name: Detect build changes
         id: diff
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           changed=$(git diff --name-only "$BASE_SHA...HEAD")
           printf '%s\n' "$changed"
-          if printf '%s\n' "$changed" | grep -qE '\.rs$|(^|/)Cargo\.(toml|lock)$|^resources/'; then
+          if printf '%s\n' "$changed" | grep -E '\.(rs|sksl)$|(^|/)Cargo\.(toml|lock)$|^resources/|^\.github/workflows/pr-check\.yml$' > /dev/null; then
             echo "rust=true" >> "$GITHUB_OUTPUT"
           else
             echo "rust=false" >> "$GITHUB_OUTPUT"
+          fi
+          if printf '%s\n' "$changed" | grep -E '^Page/|^Changelog(-zh)?\.md$|^crates/winisland-plugin-api/ChangeLog\.md$|^resources/(icon-dark\.ico|in_app/settings/(settings|widget)\.png)$|^\.github/workflows/pr-check\.yml$' > /dev/null; then
+            echo "web=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "web=false" >> "$GITHUB_OUTPUT"
           fi
 
   fmt:
@@ -72,11 +78,28 @@ jobs:
       - name: Run Clippy (warnings as errors)
         run: cargo clippy --workspace --locked -- -D warnings
 
-  # Required context. Passes when the real jobs ran and passed, and when they
-  # were correctly skipped because the PR contains no Rust.
+  web:
+    needs: classify
+    if: needs.classify.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: Page/package-lock.json
+      - name: Install website dependencies
+        working-directory: Page
+        run: npm ci
+      - name: Build website
+        working-directory: Page
+        run: npm run build
+
+  # Required context. Reports success after relevant checks pass or are skipped.
   check:
     if: always()
-    needs: [classify, fmt, clippy]
+    needs: [classify, fmt, clippy, web]
     runs-on: ubuntu-latest
     steps:
       - name: Verify outcomes
@@ -84,10 +107,11 @@ jobs:
           CLASSIFY: ${{ needs.classify.result }}
           FMT: ${{ needs.fmt.result }}
           CLIPPY: ${{ needs.clippy.result }}
+          WEB: ${{ needs.web.result }}
         run: |
           fail=0
           [ "$CLASSIFY" = "success" ] || { echo "classify: $CLASSIFY"; fail=1; }
-          for pair in "fmt:$FMT" "clippy:$CLIPPY"; do
+          for pair in "fmt:$FMT" "clippy:$CLIPPY" "web:$WEB"; do
             name=${pair%%:*}
             result=${pair#*:}
             case "$result" in

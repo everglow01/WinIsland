@@ -81,6 +81,21 @@ jobs:
     - name: Set up Rust
       uses: dtolnay/rust-toolchain@stable
 
+    - name: Verify application version
+      if: ${{ !inputs.package_only }}
+      shell: pwsh
+      env:
+        REQUESTED_VERSION: ${{ inputs.version }}
+      run: |
+        $metadata = cargo metadata --locked --no-deps --format-version 1
+        if ($LASTEXITCODE -ne 0) { throw 'Failed to read the application version.' }
+        $version = ($metadata | ConvertFrom-Json).packages |
+          Where-Object { $_.name -eq 'WinIsland' } |
+          Select-Object -ExpandProperty version
+        if ($env:REQUESTED_VERSION.TrimStart('v', 'V') -cne $version) {
+          throw "Release version must match the application version: $version"
+        }
+
     - name: Rust Cache
       uses: swatinem/rust-cache@v2
 

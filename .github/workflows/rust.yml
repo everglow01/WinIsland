@@ -35,11 +35,12 @@ jobs:
           filters: |
             rust:
               - '**/*.rs'
+              - '**/*.sksl'
               - '**/*.ps1'
               - 'resources/**'
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-              - 'build.rs'
+              - '**/Cargo.toml'
+              - '**/Cargo.lock'
+              - 'packaging/**'
               - '.github/workflows/rust.yml'
             web:
               - 'Page/**'
@@ -48,6 +49,9 @@ jobs:
 
   build-rust:
     needs: changes
+    concurrency:
+      group: nightly-release
+      cancel-in-progress: false
     if: >-
       ((github.event_name == 'workflow_dispatch' && !inputs.docs_only) ||
       (github.event_name == 'push' && needs.changes.outputs.rust == 'true')) &&
@@ -111,27 +115,46 @@ jobs:
           timestamp = $date.AddHours(8).ToString('yyyy-MM-dd HH:mm:ss')
         } | ConvertTo-Json
         $json | Out-File -FilePath target/release/version_info.json -Encoding utf8
-    - name: Delete Old Nightly Release
+    - name: Check published Nightly build
+      id: nightly-source
       if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+      shell: pwsh
       run: |
-        gh release delete nightly --yes --cleanup-tag
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      continue-on-error: true
+        $published = try {
+          Invoke-RestMethod -Uri "https://github.com/$env:GITHUB_REPOSITORY/releases/download/nightly/version_info.json?run=$env:GITHUB_RUN_ID" -TimeoutSec 30
+        } catch {
+          if ([int]$_.Exception.Response.StatusCode -ne 404) { throw }
+          $null
+        }
+        if ($null -ne $published -and [uint64]$published.build_number -gt [uint64]$env:GITHUB_RUN_NUMBER) {
+          Write-Output 'Skipping a Nightly build superseded by a newer commit.'
+          'publish=false' >> $env:GITHUB_OUTPUT
+        } else {
+          'publish=true' >> $env:GITHUB_OUTPUT
+        }
     - name: Upload Nightly Release
       uses: softprops/action-gh-release@v2
-      if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+      if: steps.nightly-source.outputs.publish == 'true'
       with:
         tag_name: nightly
+        target_commitish: ${{ github.sha }}
         name: Nightly Build
         draft: false
         prerelease: true
         files: |
           target/installer/nightly/installer/WinIsland-Nightly-Setup.exe
           target/release/version_info.json
-        make_latest: true
+        make_latest: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Update Nightly tag
+      if: steps.nightly-source.outputs.publish == 'true'
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh api --method PATCH "repos/$env:GITHUB_REPOSITORY/git/refs/tags/nightly" -f "sha=$env:GITHUB_SHA" -F force=true --silent
+        if ($LASTEXITCODE -ne 0) { throw 'Failed to update the Nightly tag.' }
 
   build-docs:
     needs: changes
