@@ -146,11 +146,13 @@ There are no Git hooks in this repository. Checks run in CI:
 
 | Workflow | Runs |
 |---|---|
-| `pr-check.yml` | `cargo fmt --all -- --check`, `cargo clippy --workspace -- -D warnings` |
-| `pr-build.yml` | `cargo build --release`, `cargo test` |
+| `pr-check.yml` | Rust formatting and Clippy; website type-checking and production build for relevant changes |
+| `pr-build.yml` | Rust release build for relevant changes |
 | `validate-pr-branch.yml` | Branch naming, for PRs from forks |
 
-Run the same commands locally before pushing. A PR whose title contains `[ci-skip]` or `[docs]` skips the first two workflows; do not use either marker.
+Checks are selected by the changed files; PR titles do not bypass them. The required result jobs still report when no build is needed. See the [check workflow](.github/workflows/pr-check.yml) and [build workflow](.github/workflows/pr-build.yml) for their commands and filters. The project does not run `cargo test`.
+
+For website changes, run `npm ci` and `npm run build` from `Page/` before pushing.
 
 ### 4.4 What if a check fails?
 

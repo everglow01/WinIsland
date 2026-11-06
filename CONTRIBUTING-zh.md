@@ -150,11 +150,13 @@ docs(contributing): describe the layer each crate owns
 
 | Workflow | 运行内容 |
 |---|---|
-| `pr-check.yml` | `cargo fmt --all -- --check`、`cargo clippy --workspace -- -D warnings` |
-| `pr-build.yml` | `cargo build --release`、`cargo test` |
+| `pr-check.yml` | Rust 格式与 Clippy 检查；相关改动的网站类型检查和生产构建 |
+| `pr-build.yml` | 相关改动的 Rust release 构建 |
 | `validate-pr-branch.yml` | 来自 fork 的 PR 的分支命名检查 |
 
-推送前请在本地运行同样的命令。PR 标题包含 `[ci-skip]` 或 `[docs]` 会跳过前两个 workflow，不要使用这两个标记。
+检查根据修改的文件选择，PR 标题不能绕过检查。不需要构建时，必需的汇总任务仍会报告结果。具体命令和筛选条件见[检查工作流](.github/workflows/pr-check.yml)与[构建工作流](.github/workflows/pr-build.yml)。本项目不运行 `cargo test`。
+
+修改网站后，推送前请在 `Page/` 下运行 `npm ci` 和 `npm run build`。
 
 ### 4.4 检查失败怎么办？
 
