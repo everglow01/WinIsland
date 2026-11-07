@@ -1,0 +1,8 @@
+[package]
+name = "winisland-plugin-timer"
+version.workspace = true
+edition = "2024"
+publish = false
+
+[dependencies]
+winisland-plugin-api = { path = "../winisland-plugin-api", default-features = false, features = ["sdk"] }

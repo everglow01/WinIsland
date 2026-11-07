@@ -312,7 +312,7 @@ impl App {
                         let mini_content = if compact_components_hidden {
                             None
                         } else {
-                            Self::mini_content_for(&self.activity_mgr, self.timer_content)
+                            Self::mini_content_for(&self.activity_mgr)
                         };
                         let attention_alpha = if self.fullscreen_hide_active()
                             && self.hide.fullscreen

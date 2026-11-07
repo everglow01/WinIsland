@@ -13,8 +13,9 @@ use winisland_plugin_api::types::v2::settings::{
 };
 use winisland_plugin_api::types::v2::widget::WidgetSpecV2;
 use winisland_plugin_api::types::v2::{
-    ActivitySpecV2, ByteSlice, ImageId, LocalDateTimeV2, LunarDateV2, PluginToken, ResourceId,
-    TextMetricsV2, TextStyleV2, Utf8Slice, WidgetId,
+    ActivitySpecV2, ActivityStatusV2, AlertSpecV2, AlertStateV2, ByteSlice, ImageId,
+    LocalDateTimeV2, LunarDateV2, PluginToken, ResourceId, TextMetricsV2, TextStyleV2, Utf8Slice,
+    WidgetId,
 };
 
 macro_rules! show {
@@ -26,6 +27,7 @@ macro_rules! show {
 
 fn main() {
     show!(ActivityApiV2, prefix, create, update, release);
+    show!(ActivityStatusV2, struct_size, flags, remaining_ms, total_ms);
     show!(
         ActivitySpecV2,
         struct_size,
@@ -104,6 +106,17 @@ fn main() {
         lunar_date,
         current_language
     );
+    show!(
+        NotificationApiV2,
+        prefix,
+        toast,
+        alert,
+        dismiss_alert,
+        alert_state
+    );
+    show!(AlertSpecV2, struct_size, flags, title, icon);
+    show!(AlertStateV2, struct_size, visible, reserved);
+    show!(IndicatorApiV2, prefix, set, clear);
     show!(
         LocalDateTimeV2,
         struct_size,

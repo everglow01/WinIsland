@@ -2,8 +2,8 @@ use std::ffi::c_void;
 use std::time::Instant;
 
 use winisland_plugin_api::{
-    ACTIVITY_ENABLED, ACTIVITY_KEEP_VISIBLE, ActivitySpecV2, CAP_ACTIVITY, PluginStatus,
-    PluginToken, ResourceId, SURFACE_COMPACT_MAIN, SURFACE_PAGE, WidgetId,
+    ACTIVITY_ENABLED, ACTIVITY_KEEP_VISIBLE, ACTIVITY_SECONDARY, ActivitySpecV2, CAP_ACTIVITY,
+    PluginStatus, PluginToken, ResourceId, SURFACE_COMPACT_MAIN, SURFACE_PAGE, WidgetId,
 };
 
 use super::{read_struct, runtime};
@@ -17,7 +17,7 @@ fn validate(
 ) -> Result<(), PluginStatus> {
     host.registry.require(token, CAP_ACTIVITY)?;
     if spec.priority > 2
-        || spec.flags & !(ACTIVITY_ENABLED | ACTIVITY_KEEP_VISIBLE) != 0
+        || spec.flags & !(ACTIVITY_ENABLED | ACTIVITY_KEEP_VISIBLE | ACTIVITY_SECONDARY) != 0
         || !spec.preferred_width.is_finite()
         || !spec.preferred_height.is_finite()
         || !(0.0..=2048.0).contains(&spec.preferred_width)
@@ -74,6 +74,7 @@ pub unsafe extern "C" fn create(
             ActivityRecord {
                 spec,
                 updated_at: Instant::now(),
+                status: None,
             },
         );
         state.activity_revision = state.activity_revision.wrapping_add(1);

@@ -2,25 +2,26 @@ use std::time::{Duration, Instant};
 
 use winisland_core::anim::{Curve, Tween};
 use winisland_platform::DeviceActivity;
-use winisland_render::{Painter, Point, Rect, Rgba};
+use winisland_render::{Angle, Painter, Point, Rect, Rgba, StrokeCap, Vec2};
 
-use crate::ui::compact::timer::TimerContent;
-
-use super::Activity;
+use super::{Activity, Indicator};
 
 const PILL_EXTENSION: f32 = 0.75;
 const FADE_DURATION: Duration = Duration::from_millis(100);
 const SHARE_DURATION: Duration = Duration::from_millis(420);
-const TIMER_ICON_DIAMETER: f32 = 26.0;
+const ICON_DIAMETER: f32 = 26.0;
+const ICON_SIZE: f32 = 18.0;
+const YELLOW: Rgba = Rgba::from_rgb(255, 204, 0);
 
 pub(crate) struct StatusIndicators {
     camera: Tween,
     microphone: Tween,
-    timer: Tween,
+    indicator: Tween,
     plugin: Tween,
     shared: Tween,
-    timer_progress: f32,
-    timer_paused: bool,
+    indicator_progress: f32,
+    indicator_paused: bool,
+    indicator_page: Option<u64>,
     plugin_surface: Option<u64>,
 }
 
@@ -29,11 +30,12 @@ impl Default for StatusIndicators {
         Self {
             camera: Tween::new(0.0),
             microphone: Tween::new(0.0),
-            timer: Tween::new(0.0),
+            indicator: Tween::new(0.0),
             plugin: Tween::new(0.0),
             shared: Tween::new(0.0),
-            timer_progress: 0.0,
-            timer_paused: false,
+            indicator_progress: 0.0,
+            indicator_paused: false,
+            indicator_page: None,
             plugin_surface: None,
         }
     }
@@ -43,31 +45,32 @@ impl StatusIndicators {
     pub(crate) fn update(
         &mut self,
         state: DeviceActivity,
-        timer: Option<TimerContent>,
+        indicator: Option<Indicator>,
         plugin_surface: Option<u64>,
         now: Instant,
     ) -> bool {
         let before = self.activity();
         let camera = state.camera == Some(true);
         let microphone = state.microphone == Some(true);
-        let timing = timer.is_some();
-        let plugin = plugin_surface.is_some() && !timing;
+        let counting = indicator.is_some();
+        let plugin = plugin_surface.is_some() && !counting;
         let devices = camera || microphone;
-        let occupied = timing || plugin;
+        let occupied = counting || plugin;
         let pace = |other: bool| if other { SHARE_DURATION } else { FADE_DURATION };
         for (animation, active, duration) in [
             (&mut self.camera, camera, pace(occupied)),
-            (&mut self.microphone, microphone, pace(occupied)),
-            (&mut self.timer, timing, pace(devices)),
+            (&mut self.microphone, microphone, pace(devices)),
+            (&mut self.indicator, counting, pace(devices)),
             (&mut self.plugin, plugin, pace(devices)),
             (&mut self.shared, devices && occupied, SHARE_DURATION),
         ] {
             animation.retarget(if active { 1.0 } else { 0.0 }, duration, Curve::Ease, now);
             animation.update(now);
         }
-        if let Some(timer) = timer {
-            self.timer_progress = (timer.progress() * 720.0).round() / 720.0;
-            self.timer_paused = timer.paused;
+        if let Some(indicator) = indicator {
+            self.indicator_progress = (indicator.progress * 720.0).round() / 720.0;
+            self.indicator_paused = indicator.paused;
+            self.indicator_page = indicator.page;
         }
         if plugin {
             self.plugin_surface = plugin_surface;
@@ -80,17 +83,18 @@ impl StatusIndicators {
     pub(crate) fn activity(&self) -> Option<Activity> {
         let camera = self.camera.value();
         let microphone = self.microphone.value();
-        let timer = self.timer.value();
+        let indicator = self.indicator.value();
         let plugin = self.plugin_surface.map_or(0.0, |_| self.plugin.value());
-        (camera > 0.0 || microphone > 0.0 || timer > 0.0 || plugin > 0.0 || self.is_animating())
+        (camera > 0.0 || microphone > 0.0 || indicator > 0.0 || plugin > 0.0 || self.is_animating())
             .then_some(Activity::Status {
                 camera,
                 microphone,
-                timer,
+                indicator,
                 plugin,
                 shared: self.shared.value(),
-                timer_progress: self.timer_progress,
-                timer_paused: self.timer_paused,
+                indicator_progress: self.indicator_progress,
+                indicator_paused: self.indicator_paused,
+                indicator_page: self.indicator_page,
                 plugin_surface: self.plugin_surface,
             })
     }
@@ -98,7 +102,7 @@ impl StatusIndicators {
     pub(crate) fn is_animating(&self) -> bool {
         self.camera.is_animating()
             || self.microphone.is_animating()
-            || self.timer.is_animating()
+            || self.indicator.is_animating()
             || self.plugin.is_animating()
             || self.shared.is_animating()
     }
@@ -107,9 +111,9 @@ impl StatusIndicators {
 pub(super) struct Indicators {
     pub(super) camera: f32,
     pub(super) microphone: f32,
-    pub(super) timer: f32,
-    pub(super) timer_progress: f32,
-    pub(super) timer_paused: bool,
+    pub(super) indicator: f32,
+    pub(super) indicator_progress: f32,
+    pub(super) indicator_paused: bool,
 }
 
 pub(super) fn width(height: f32, shared: f32) -> f32 {
@@ -124,14 +128,14 @@ pub(super) fn draw(
     indicators: Indicators,
 ) {
     let diameter = rect.width().min(rect.height());
-    if indicators.timer > 0.0 {
-        crate::ui::compact::timer::draw_timer_icon(
+    if indicators.indicator > 0.0 {
+        draw_indicator(
             painter,
             Point::new(rect.left + diameter / 2.0, rect.center_y()),
-            diameter / TIMER_ICON_DIAMETER,
-            indicators.timer_progress,
-            indicators.timer_paused,
-            opacity * indicators.timer * indicators.timer,
+            diameter / ICON_DIAMETER,
+            indicators.indicator_progress,
+            indicators.indicator_paused,
+            opacity * indicators.indicator * indicators.indicator,
         );
     }
     let dot_radius = diameter / 9.0;
@@ -157,4 +161,56 @@ pub(super) fn draw(
             color.with_alpha_f(opacity * visibility * visibility),
         );
     }
+}
+
+fn draw_indicator(
+    painter: Painter<'_>,
+    center: Point,
+    scale: f32,
+    progress: f32,
+    paused: bool,
+    alpha: f32,
+) {
+    let color = YELLOW.with_alpha_f(alpha * if paused { 0.65 } else { 1.0 });
+    let radius = (ICON_SIZE / 2.0 - 1.6) * scale;
+    let ring_width = 1.8 * scale;
+    painter.stroke_circle(
+        center,
+        radius,
+        ring_width,
+        color.with_alpha_f(f32::from(color.a()) / 255.0 * 0.22),
+    );
+    if progress > 0.0 {
+        painter.stroke_arc(
+            Rect::from_xywh(
+                center.x - radius,
+                center.y - radius,
+                radius * 2.0,
+                radius * 2.0,
+            ),
+            Angle::ZERO,
+            Angle::from_degrees(progress * 360.0),
+            ring_width,
+            color,
+            StrokeCap::Round,
+        );
+    }
+    let angle = progress * std::f32::consts::TAU;
+    let direction = Vec2::new(angle.sin(), -angle.cos());
+    let marker_width = 1.5 * scale;
+    let outer = radius - ring_width / 2.0 - marker_width / 2.0 - 0.8 * scale;
+    let inner = outer - 2.2 * scale;
+    painter.stroke_line(
+        Point::new(
+            center.x + direction.x * inner,
+            center.y + direction.y * inner,
+        ),
+        Point::new(
+            center.x + direction.x * outer,
+            center.y + direction.y * outer,
+        ),
+        marker_width,
+        color,
+        StrokeCap::Round,
+    );
 }

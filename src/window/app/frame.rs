@@ -76,7 +76,6 @@ impl App {
         }
         self.handle_tray_events(&window);
         self.handle_hide_hotkey(&window, now);
-        self.handle_timer_finished(&window);
         self.poll_clipboard_link(&window);
         self.reload_config_if_changed(&window);
         if self.is_hidden() && !self.can_hide() {
@@ -91,7 +90,8 @@ impl App {
             settings.set_plugin_settings_pages(pages);
         }
         let activities_changed = self.refresh_v2_activities();
-        if self.activity_mgr.tick() || activities_changed {
+        let secondary_changed = self.update_secondary_activities();
+        if self.activity_mgr.tick() || activities_changed || secondary_changed {
             self.resize_activity_window();
             window.request_redraw();
         }
@@ -118,13 +118,10 @@ impl App {
         self.update_right_drag(&window, px, py);
 
         let (music_active, media_is_playing) = self.poll_media_info(&window);
-        if self.compact_overlay.update_timer_finished() {
+        if self.compact_overlay.update_alert() {
             window.request_redraw();
         }
         let activities_changed = self.update_local_activities(music_active, media_is_playing);
-        if self.timer_content.is_some() && self.compact_overlay.is_timer_finished_visible() {
-            self.compact_overlay.clear_timer_finished();
-        }
         if activities_changed {
             window.request_redraw();
         }
@@ -219,7 +216,15 @@ impl App {
         self.lingosoul
             .set_screen_height(self.geom.monitor_size.1 as f32);
         self.lingosoul.set_expanded(self.expanded);
-        self.lingosoul.update(dt);
+        if let Some(seconds) = self.lingosoul.update(dt) {
+            let data = seconds.to_string();
+            if let Some(host) = &self.plugin_host {
+                let _ = host
+                    .runtime()
+                    .extensions
+                    .invoke(crate::plugin::timer::START_COMMAND, data.as_bytes());
+            }
+        }
         self.update_assistant_reveal(&window);
         self.serve_assistant_requests();
         self.sync_chat_focus();
@@ -501,29 +506,6 @@ impl App {
             return;
         };
         self.compact_overlay.show_link(url);
-        self.idle_timer = Instant::now();
-        window.request_redraw();
-    }
-
-    fn handle_timer_finished(&mut self, window: &WindowRef) {
-        let Some(seconds) = crate::ui::expanded::timer_view::poll_finished() else {
-            return;
-        };
-        log::info!("Timer finished ({seconds} s)");
-        self.compact_overlay.show_timer_finished();
-        self.expanded = false;
-        self.reset_page();
-        if !self.visible || self.fullscreen_hide_active() {
-            let duration = crate::ui::expanded::timer_view::duration_label(seconds);
-            Self::show_toast(
-                &winisland_core::i18n::tr("timer_done"),
-                &winisland_core::i18n::tr_args("timer_done_toast", &[&duration]),
-            );
-            return;
-        }
-        if self.is_hidden() {
-            self.reveal_island();
-        }
         self.idle_timer = Instant::now();
         window.request_redraw();
     }
@@ -1203,25 +1185,12 @@ impl App {
 
     fn schedule_next_frame(&mut self, window: &WindowRef, now: Instant, pacing: FramePacing) {
         let should_periodic_redraw = self.periodic_effect_redraw_due();
-        let compact_timer = if !self.expanded
-            && !self.is_hidden()
-            && !self.components_hidden
-            && !self.compact_overlay.is_visible()
-        {
-            match self.mini_content() {
-                Some(crate::ui::island::MiniContent::Timer(timer)) => Some(timer),
-                _ => None,
-            }
-        } else {
-            None
-        };
         let transition_active = self.recorder.is_some()
             || self.lingosoul.is_animating()
             || self.lingosoul.has_pending_requests()
             || self.springs.any_animating()
             || self.pager_hover_animating()
-            || self.compact_overlay.is_timer_finished_animating()
-            || (compact_timer.is_some() && crate::ui::compact::timer::countdown_is_animating())
+            || self.compact_overlay.is_alert_animating()
             || self.multitask.is_animating()
             || self.status_indicators.is_animating()
             || self
@@ -1235,10 +1204,10 @@ impl App {
             || self.is_dragging
             || self.seek.active
             || self.is_right_dragging;
-        let timer_alert_visible = self.compact_overlay.is_timer_finished_visible();
-        let resource_usage_active = !timer_alert_visible && self.resource_usage_animating();
+        let alert_visible = self.compact_overlay.is_alert_visible();
+        let resource_usage_active = !alert_visible && self.resource_usage_animating();
         let compact_components_visible = self.expanded || !self.components_hidden;
-        let playback_active = !timer_alert_visible
+        let playback_active = !alert_visible
             && !self.is_hidden()
             && compact_components_visible
             && pacing.media_is_playing
@@ -1249,13 +1218,12 @@ impl App {
             && self.current_media_info().thumbnail.is_some();
         let interactive_active = (pacing.is_hovering_visible
             && (!self.expanded || self.page_visible(ExpandedPage::Music)))
-            || (pacing.compact_overlay_visible && !timer_alert_visible)
+            || (pacing.compact_overlay_visible && !alert_visible)
             || pacing.passive_reveal_active
             || self.right_press_cursor.is_some()
-            || compact_timer.is_some_and(|timer| !timer.paused)
-            || (self.expanded
-                && self.page_visible(ExpandedPage::Timer)
-                && crate::ui::expanded::timer_view::needs_frames());
+            || self
+                .secondary_indicator
+                .is_some_and(|indicator| !indicator.progress.paused);
         if !transition_active
             && !interactive_active
             && !resource_usage_active

@@ -64,6 +64,7 @@ pub const SURFACE_COMPACT_MAIN: u32 = 6;
 /// the plugin's first page.
 pub const SURFACE_STATUS: u32 = 7;
 pub const SURFACE_ENABLED: u32 = 1;
+pub const ALERT_VISIBLE: u32 = 1;
 pub const TIMER_VISIBLE_ONLY: u32 = 1;
 pub const COMMAND_ENABLED: u32 = 1;
 pub const COMMAND_TRAY: u32 = 2;
@@ -148,6 +149,31 @@ pub struct SurfaceSpecV2 {
     pub height: f32,
     pub key: [u8; 64],
     pub title: [u8; 256],
+}
+
+/// A compact alert card the host draws beside or in place of the compact island. The caller owns
+/// the title text and the optional leading icon.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct AlertSpecV2 {
+    pub struct_size: u32,
+    pub flags: u32,
+    /// Alert title. Max 255 bytes plus NUL.
+    pub title: [u8; 256],
+    /// Body used when the host reports the alert as a system toast instead of a card. Max 511
+    /// bytes plus NUL.
+    pub body: [u8; 512],
+    /// SVG path data for the leading icon. Empty means no icon. Max 16 KiB.
+    pub icon: Utf8Slice,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct AlertStateV2 {
+    pub struct_size: u32,
+    /// [`ALERT_VISIBLE`] while the caller's alert is still on screen.
+    pub visible: u8,
+    pub reserved: [u8; 3],
 }
 
 #[repr(C)]
@@ -236,6 +262,8 @@ sized_default!(
     EventSubscriptionV2,
     TimerSpecV2,
     SurfaceSpecV2,
+    AlertSpecV2,
+    AlertStateV2,
     CommandSpecV2,
     CommandInfoV2,
     AssistantToolSpecV2,

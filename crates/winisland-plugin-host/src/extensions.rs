@@ -62,6 +62,10 @@ pub enum HostRequest {
         data: Vec<u8>,
     },
     ShowPage(u64),
+    Toast {
+        title: String,
+        body: String,
+    },
     Media {
         session: u64,
         command: u32,
