@@ -4,7 +4,6 @@ use winisland_plugin_api::sdk::LunarDate;
 pub(super) enum Region {
     UnitedStates,
     China,
-    Spain,
 }
 
 pub(super) struct Holiday {
@@ -26,20 +25,6 @@ const EN_MONTHS: [&str; 12] = [
     "November",
     "December",
 ];
-const ES_MONTHS: [&str; 12] = [
-    "Enero",
-    "Febrero",
-    "Marzo",
-    "Abril",
-    "Mayo",
-    "Junio",
-    "Julio",
-    "Agosto",
-    "Septiembre",
-    "Octubre",
-    "Noviembre",
-    "Diciembre",
-];
 const EN_WEEKDAYS: [&str; 7] = [
     "Sunday",
     "Monday",
@@ -48,15 +33,6 @@ const EN_WEEKDAYS: [&str; 7] = [
     "Thursday",
     "Friday",
     "Saturday",
-];
-const ES_WEEKDAYS: [&str; 7] = [
-    "domingo",
-    "lunes",
-    "martes",
-    "miércoles",
-    "jueves",
-    "viernes",
-    "sábado",
 ];
 const ZH_WEEKDAYS: [&str; 7] = [
     "星期日",
@@ -68,7 +44,6 @@ const ZH_WEEKDAYS: [&str; 7] = [
     "星期六",
 ];
 const EN_INITIALS: [&str; 7] = ["S", "M", "T", "W", "T", "F", "S"];
-const ES_INITIALS: [&str; 7] = ["D", "L", "M", "X", "J", "V", "S"];
 const ZH_INITIALS: [&str; 7] = ["日", "一", "二", "三", "四", "五", "六"];
 
 impl Region {
@@ -76,8 +51,6 @@ impl Region {
         let lang = lang.to_ascii_lowercase();
         if lang.starts_with("zh") {
             Self::China
-        } else if lang.starts_with("es") {
-            Self::Spain
         } else {
             Self::UnitedStates
         }
@@ -86,7 +59,7 @@ impl Region {
     pub(super) fn week_start(self) -> u16 {
         match self {
             Self::UnitedStates => 0,
-            Self::China | Self::Spain => 1,
+            Self::China => 1,
         }
     }
 
@@ -94,7 +67,6 @@ impl Region {
         let index = usize::from(weekday % 7);
         match self {
             Self::UnitedStates => EN_WEEKDAYS[index].to_uppercase(),
-            Self::Spain => ES_WEEKDAYS[index].to_uppercase(),
             Self::China => ZH_WEEKDAYS[index].to_string(),
         }
     }
@@ -103,7 +75,6 @@ impl Region {
         let index = usize::from(weekday % 7);
         match self {
             Self::UnitedStates => EN_INITIALS[index],
-            Self::Spain => ES_INITIALS[index],
             Self::China => ZH_INITIALS[index],
         }
     }
@@ -112,7 +83,6 @@ impl Region {
         let index = usize::from(month.clamp(1, 12) - 1);
         match self {
             Self::UnitedStates => format!("{} {year}", EN_MONTHS[index]),
-            Self::Spain => format!("{} {year}", ES_MONTHS[index]),
             Self::China => format!("{year}年{month}月"),
         }
     }
@@ -120,7 +90,6 @@ impl Region {
     pub(super) fn short_date(self, month: u16, day: u16) -> String {
         match self {
             Self::UnitedStates => format!("{month}/{day}"),
-            Self::Spain => format!("{day}/{month}"),
             Self::China => format!("{month}月{day}日"),
         }
     }
@@ -166,27 +135,6 @@ impl Region {
                 let (easter_month, easter_day) = easter_sunday(year);
                 if easter_month == month {
                     add(easter_day, "Easter");
-                }
-            }
-            Self::Spain => {
-                for (m, d, name) in [
-                    (1, 1, "Año Nuevo"),
-                    (1, 6, "Epifanía del Señor"),
-                    (5, 1, "Fiesta del Trabajo"),
-                    (8, 15, "Asunción de la Virgen"),
-                    (10, 12, "Fiesta Nacional de España"),
-                    (11, 1, "Todos los Santos"),
-                    (12, 6, "Día de la Constitución"),
-                    (12, 8, "Inmaculada Concepción"),
-                    (12, 25, "Navidad"),
-                ] {
-                    if m == month {
-                        add(d, name);
-                    }
-                }
-                let (good_friday_month, good_friday_day) = good_friday(year);
-                if good_friday_month == month {
-                    add(good_friday_day, "Viernes Santo");
                 }
             }
             Self::China => {
@@ -299,15 +247,6 @@ fn easter_sunday(year: u16) -> (u16, u16) {
     let month = (h + l - 7 * m + 114) / 31;
     let day = (h + l - 7 * m + 114) % 31 + 1;
     (month as u16, day as u16)
-}
-
-fn good_friday(year: u16) -> (u16, u16) {
-    let (month, day) = easter_sunday(year);
-    if day > 2 {
-        (month, day - 2)
-    } else {
-        (month - 1, days_in_month(year, month - 1) + day - 2)
-    }
 }
 
 fn qingming_day(year: u16) -> u16 {
