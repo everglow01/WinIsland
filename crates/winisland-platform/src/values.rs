@@ -310,7 +310,6 @@ pub enum TrayAction {
     ToggleVisibility,
     OpenSettings,
     ShowGuide,
-    ToggleRecording,
     Restart,
     Exit,
 }
@@ -351,7 +350,6 @@ pub struct TrayLabels {
     pub toggle: String,
     pub settings: String,
     pub guide: String,
-    pub record: String,
     pub restart: String,
     pub exit: String,
     pub tooltip: String,

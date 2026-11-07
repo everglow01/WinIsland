@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-use std::sync::mpsc::Sender;
-use std::time::{Duration, Instant};
 
 use skia_safe::{Color, ImageInfo, Paint, Rect, Surface, gpu, image_filters};
 
@@ -20,22 +18,6 @@ use crate::types::{Sampling, TileMode};
 const MAIN_TARGET: RendererTargetId = RendererTargetId(0);
 
 static BACKDROP_GENERATION: AtomicU64 = AtomicU64::new(1);
-
-/// One composited main-window frame captured while recording, as opaque RGBA8 pixels.
-pub struct RecordedFrame {
-    pub width: u32,
-    pub height: u32,
-    pub pixels: Vec<u8>,
-    pub at: Instant,
-}
-
-struct Recording {
-    sender: Sender<RecordedFrame>,
-    interval: Duration,
-    next_due: Instant,
-    surface: Option<Surface>,
-    frame: Option<Surface>,
-}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct RendererOptions {
@@ -152,7 +134,6 @@ pub struct Renderer {
     next_target_id: u64,
     failure: Option<String>,
     backdrop: Option<SharedBackdrop>,
-    recording: Option<Recording>,
 }
 
 impl Renderer {
@@ -167,7 +148,6 @@ impl Renderer {
             next_target_id: 1,
             failure: None,
             backdrop: None,
-            recording: None,
         })
     }
 
@@ -252,26 +232,6 @@ impl Renderer {
         self.record_result(result)
     }
 
-    /// Sends the main window composited over the captured screen behind it to `sender`, at most
-    /// `fps` times per second, until stopped or the receiver is dropped.
-    pub fn start_recording(&mut self, sender: Sender<RecordedFrame>, fps: u32) {
-        self.recording = Some(Recording {
-            sender,
-            interval: Duration::from_secs_f64(1.0 / f64::from(fps.max(1))),
-            next_due: Instant::now(),
-            surface: None,
-            frame: None,
-        });
-    }
-
-    pub fn stop_recording(&mut self) {
-        self.recording = None;
-    }
-
-    pub fn is_recording(&self) -> bool {
-        self.recording.is_some()
-    }
-
     pub fn release_backdrop(&mut self) {
         if self.backdrop.is_none() {
             return;
@@ -315,18 +275,7 @@ impl Renderer {
         let target = self.targets.get_mut(&target_id).ok_or_else(|| {
             RenderError::Backend("D3D12 render target is unavailable".to_string())
         })?;
-        let present = target.current_surface()?;
-        let mut offscreen = if target_id == MAIN_TARGET
-            && let Some(recording) = self.recording.as_mut()
-        {
-            recording.take_frame(&mut self.device.context, present.width(), present.height())
-        } else {
-            None
-        };
-        let surface = match offscreen.as_mut() {
-            Some(surface) => surface,
-            None => &mut *present,
-        };
+        let surface = target.current_surface()?;
         let canvas = surface.canvas();
         canvas.restore_to_count(1);
         canvas.reset_matrix();
@@ -340,29 +289,8 @@ impl Renderer {
             surface,
         );
         surface.canvas().restore_to_count(1);
-        if let Some(mut frame) = offscreen {
-            let image = frame.image_snapshot();
-            let canvas = present.canvas();
-            canvas.restore_to_count(1);
-            canvas.reset_matrix();
-            let mut paint = Paint::default();
-            paint.set_blend_mode(skia_safe::BlendMode::Src);
-            canvas.draw_image(&image, (0, 0), Some(&paint));
-            if let Some(recording) = self.recording.as_mut() {
-                let alive = record_frame(
-                    recording,
-                    &image,
-                    &mut self.device.context,
-                    self.backdrop.as_mut(),
-                );
-                recording.frame = Some(frame);
-                if !alive {
-                    self.recording = None;
-                }
-            }
-        }
         self.device.context.flush_surface_with_access(
-            present,
+            surface,
             skia_safe::surfaces::BackendSurfaceAccess::Present,
             &gpu::FlushInfo::default(),
         );
@@ -441,87 +369,4 @@ impl Drop for Renderer {
         }
         self.targets.clear();
     }
-}
-
-impl Recording {
-    fn take_frame(
-        &mut self,
-        context: &mut gpu::DirectContext,
-        width: i32,
-        height: i32,
-    ) -> Option<Surface> {
-        match self.frame.take() {
-            Some(surface) if surface.width() == width && surface.height() == height => {
-                Some(surface)
-            }
-            _ => gpu::surfaces::render_target(
-                context,
-                gpu::Budgeted::Yes,
-                &ImageInfo::new_n32_premul((width, height), None),
-                None,
-                Some(gpu::SurfaceOrigin::TopLeft),
-                None,
-                Some(false),
-                Some(false),
-            ),
-        }
-    }
-}
-
-fn record_frame(
-    recording: &mut Recording,
-    island: &skia_safe::Image,
-    context: &mut gpu::DirectContext,
-    backdrop: Option<&mut SharedBackdrop>,
-) -> bool {
-    let now = Instant::now();
-    if now < recording.next_due {
-        return true;
-    }
-    recording.next_due = now + recording.interval.mul_f32(0.75);
-    let (width, height) = (island.width(), island.height());
-    let info = ImageInfo::new(
-        (width, height),
-        skia_safe::ColorType::RGBA8888,
-        skia_safe::AlphaType::Premul,
-        None,
-    );
-    if recording
-        .surface
-        .as_ref()
-        .is_none_or(|export| export.width() != width || export.height() != height)
-    {
-        recording.surface = gpu::surfaces::render_target(
-            context,
-            gpu::Budgeted::Yes,
-            &info,
-            None,
-            Some(gpu::SurfaceOrigin::TopLeft),
-            None,
-            Some(false),
-            Some(false),
-        );
-    }
-    let Some(export) = recording.surface.as_mut() else {
-        return true;
-    };
-    let canvas = export.canvas();
-    canvas.clear(Color::BLACK);
-    if let Some((behind, _)) = backdrop.and_then(|backdrop| backdrop.images(context)) {
-        canvas.draw_image(&behind, (0, 0), None);
-    }
-    canvas.draw_image(island, (0, 0), None);
-    let mut pixels = vec![0_u8; info.compute_min_byte_size()];
-    if !export.read_pixels(&info, &mut pixels, info.min_row_bytes(), (0, 0)) {
-        return true;
-    }
-    recording
-        .sender
-        .send(RecordedFrame {
-            width: width as u32,
-            height: height as u32,
-            pixels,
-            at: now,
-        })
-        .is_ok()
 }

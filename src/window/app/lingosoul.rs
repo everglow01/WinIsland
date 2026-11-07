@@ -44,7 +44,7 @@ const MAX_PASTE: usize = 4000;
 const DOUBLE_TAP: Duration = Duration::from_millis(320);
 /// How often the island looks for a new LingoSoul release.
 const UPDATE_INTERVAL: Duration = Duration::from_secs(12 * 60 * 60);
-/// Synthetic command id for the tray item and hotkey that open the chat panel.
+/// Synthetic command id for the hotkey that opens the chat panel.
 pub(super) const CHAT_COMMAND: u64 = u64::MAX;
 
 pub(super) struct LingoSoulView {
@@ -674,7 +674,7 @@ impl App {
                 id: CHAT_COMMAND,
                 title: winisland_core::i18n::tr("lingosoul_chat_open"),
                 enabled: true,
-                menu: true,
+                menu: false,
                 hotkey: Some(winisland_platform::Hotkey {
                     ctrl: true,
                     alt: true,

@@ -1215,8 +1215,7 @@ impl App {
         } else {
             None
         };
-        let transition_active = self.recorder.is_some()
-            || self.lingosoul.is_animating()
+        let transition_active = self.lingosoul.is_animating()
             || self.lingosoul.has_pending_requests()
             || self.springs.any_animating()
             || self.pager_hover_animating()

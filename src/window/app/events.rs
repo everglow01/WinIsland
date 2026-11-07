@@ -38,7 +38,7 @@ impl App {
                     if self.tray_installed {
                         let _ = crate::platform::shell().tray_update(
                             crate::platform::tray_theme(is_light),
-                            crate::platform::tray_labels(self.visible, self.recorder.is_some()),
+                            crate::platform::tray_labels(self.visible),
                         );
                     }
                 }
@@ -473,25 +473,13 @@ impl App {
                                 window: self.window,
                                 origin: (self.geom.win_x, self.geom.win_y),
                                 frame_interval: self.display_frame_interval,
-                                interest: if self.recorder.is_some() {
-                                    let size = win.inner_size();
-                                    winisland_render::Rect::from_xywh(
-                                        0.0,
-                                        0.0,
-                                        size.width as f32,
-                                        size.height as f32,
-                                    )
-                                } else {
-                                    liquid_interest
-                                },
+                                interest: liquid_interest,
                                 frost_sigma: self.config.liquid_glass_blur
                                     * liquid_scale
                                     * (1.0 - 0.85 * self.lingosoul.style().drop),
-                                active: self.recorder.is_some()
-                                    || self.config.island_style == "liquid"
+                                active: self.config.island_style == "liquid"
                                     || self.lingosoul.needs_backdrop(),
-                                animating: self.recorder.is_some()
-                                    || self.springs.any_animating()
+                                animating: self.springs.any_animating()
                                     || self.lingosoul.is_animating(),
                                 visible_to_capture: self.config.liquid_glass_compat_capture,
                             },
@@ -742,7 +730,6 @@ impl AppHandler for App {
         }
         self.close_settings();
         self.close_guide();
-        self.stop_recording();
         self.stop_backdrop_capture();
         if let Some(window_ref) = self.window.take() {
             window().release_host_backdrop(window_ref.id());
