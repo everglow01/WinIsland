@@ -504,7 +504,6 @@ impl AudioProcessor {
                         announced_device_name = default_device_name.clone();
                     }
 
-                    // Releasing old stream and session
                     current_stream = None;
                     current_stream_failed = None;
                     stream_running = false;
@@ -577,8 +576,6 @@ impl AudioProcessor {
 
                 std::thread::sleep(AUDIO_POLL_INTERVAL);
             }
-
-            // Cleanup when loop ends
         });
     }
 }

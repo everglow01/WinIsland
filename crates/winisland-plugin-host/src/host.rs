@@ -80,7 +80,7 @@ impl PluginHost {
             .resources
             .owner(ResourceKind::Widget, id)
             .ok()?;
-        Some(self.runtime.registry.get(token).ok()?.id.clone())
+        Some(self.runtime.registry.get(token).ok()?.id)
     }
 
     /// Enabled expanded pages with their owning plugin, in surface order.
@@ -628,12 +628,13 @@ impl PluginHost {
     }
 
     pub fn shutdown_all(&self) -> Vec<String> {
-        let ids = self
-            .entries
-            .borrow()
-            .iter()
-            .map(|entry| entry.library().metadata().id.clone())
-            .collect::<Vec<_>>();
+        let ids = {
+            let entries = self.entries.borrow();
+            entries
+                .iter()
+                .map(|entry| entry.library().metadata().id.clone())
+                .collect::<Vec<_>>()
+        };
         ids.into_iter()
             .filter_map(|id| {
                 self.unload_if_loaded(&id)

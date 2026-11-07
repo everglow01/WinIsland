@@ -89,7 +89,8 @@ impl Registry {
     }
 
     pub fn require(&self, token: PluginToken, capability: u64) -> Result<(), PluginStatus> {
-        let plugin = self.get(token)?;
+        let state = self.inner.lock().map_err(|_| PluginStatus::Internal)?;
+        let plugin = state.plugins.get(&token).ok_or(PluginStatus::StaleHandle)?;
         if plugin.stopping {
             return Err(PluginStatus::StaleHandle);
         }

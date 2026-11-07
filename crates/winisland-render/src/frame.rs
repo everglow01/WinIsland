@@ -242,34 +242,19 @@ impl Renderer {
         self.backdrop = None;
     }
 
-    fn draw<T>(
-        &mut self,
-        target_id: RendererTargetId,
-        draw: impl FnOnce(&mut DrawingContext<'_>, &mut Surface) -> T,
-    ) -> RenderResult<T> {
-        let result = self.draw_inner(target_id, draw);
-        self.record_result(result)
-    }
-
     pub fn frame<T>(
         &mut self,
         target_id: RendererTargetId,
         draw: impl FnOnce(&mut DrawingContext<'_>, Painter<'_>) -> T,
     ) -> RenderResult<T> {
-        self.draw(target_id, |drawing_context, surface| {
-            draw(
-                drawing_context,
-                Painter {
-                    canvas: surface.canvas(),
-                },
-            )
-        })
+        let result = self.frame_inner(target_id, draw);
+        self.record_result(result)
     }
 
-    fn draw_inner<T>(
+    fn frame_inner<T>(
         &mut self,
         target_id: RendererTargetId,
-        draw: impl FnOnce(&mut DrawingContext<'_>, &mut Surface) -> T,
+        draw: impl FnOnce(&mut DrawingContext<'_>, Painter<'_>) -> T,
     ) -> RenderResult<T> {
         self.check_ready()?;
         let target = self.targets.get_mut(&target_id).ok_or_else(|| {
@@ -286,7 +271,9 @@ impl Renderer {
                 direct_context: &mut self.device.context,
                 backdrop: self.backdrop.as_mut(),
             },
-            surface,
+            Painter {
+                canvas: surface.canvas(),
+            },
         );
         surface.canvas().restore_to_count(1);
         self.device.context.flush_surface_with_access(
