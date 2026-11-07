@@ -55,6 +55,25 @@ Match the code around you before writing new code. When a document and the code 
 - **Files**: prefer editing an existing file over creating a new one.
 - **Emoji**: none, unless the user asks.
 
+## Where a new feature goes
+
+A user-facing feature is a built-in plugin, not application code.
+
+The calendar is the reference implementation. It lives in `crates/winisland-plugin-calendar/`, depends only on `winisland-plugin-api` (`default-features = false`, feature `sdk`), exports `descriptor()`, and is registered in `builtin_plugins()` in `src/plugin/mod.rs`. The plugin system is described in [.agents/ARCHITECTURE.md](.agents/ARCHITECTURE.md#plugin-system); the ABI and packaging guide is [Page/plugin-dev.md](Page/plugin-dev.md).
+
+To add a feature:
+
+1. Create `crates/winisland-plugin-<name>/` with its own `Cargo.toml` that depends on `winisland-plugin-api` and nothing else from the workspace.
+2. Implement the ABI v2 entry point and expose `descriptor()`.
+3. Add the crate to the workspace `members` list in the root `Cargo.toml`, register it in `builtin_plugins()` in `src/plugin/mod.rs`, and add its translation keys.
+4. Draw, take input, and persist through the plugin services. Do not reach into `src/`.
+
+Do not add feature code to `src/`. `src/` owns the platform wiring, the application state machine, and the settings shell. A page, a widget, a timer, a calendar, or a media surface is a plugin.
+
+If a feature cannot be expressed through the plugin ABI, name the host capability that is missing and propose adding it to the ABI. Do not route around the seam by writing the feature into `src/`.
+
+Known debt: the timer is implemented in `src/ui/expanded/timer_view.rs` and `src/ui/compact/timer.rs` rather than as a plugin. Treat it as the case to migrate, not as a precedent.
+
 ## Before you edit
 
 - Read the file you are changing and at least one neighbour. Match them, not your habits.
