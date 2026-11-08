@@ -318,8 +318,10 @@ impl Desktop {
         });
         let count = u32::try_from(self.excluded.len())
             .map_err(|_| Error::new(E_INVALIDARG, "Too many excluded windows"))?;
-        // SAFETY: The stored function matches this OS's ABI. All arrays and outputs are owned
-        // by this desktop, and its host and thumbnail remain alive throughout the call.
+        let mut source = self.source;
+        let mut size = self.size;
+        // SAFETY: The stored function matches this OS's ABI. All buffers, the host and the
+        // thumbnail remain alive throughout this synchronous call.
         unsafe {
             match self.update {
                 DesktopUpdate::Legacy(update) => update(
@@ -328,8 +330,8 @@ impl Desktop {
                     0,
                     self.excluded.as_ptr(),
                     count,
-                    &mut self.source,
-                    &mut self.size,
+                    &mut source,
+                    &mut size,
                 )
                 .ok(),
                 DesktopUpdate::MultiWindow(update) => update(
@@ -338,8 +340,8 @@ impl Desktop {
                     0,
                     self.excluded.as_ptr(),
                     count,
-                    &mut self.source,
-                    &mut self.size,
+                    &mut source,
+                    &mut size,
                     1,
                 )
                 .ok(),
@@ -350,8 +352,15 @@ impl Desktop {
     pub(super) fn recreate(
         &self,
         device: &IDCompositionDesktopDevice,
+        excluded: Option<&[HWND]>,
     ) -> Result<(Self, IDCompositionVisual2)> {
-        Self::new(self.host, device, &self.excluded, self.source, self.size)
+        Self::new(
+            self.host,
+            device,
+            excluded.unwrap_or(&self.excluded),
+            self.source,
+            self.size,
+        )
     }
 
     pub(super) fn set_excluded(&mut self, excluded: Vec<HWND>) -> Result<()> {

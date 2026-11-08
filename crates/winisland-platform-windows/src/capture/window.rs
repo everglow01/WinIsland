@@ -10,7 +10,7 @@ use windows::Win32::Foundation::{
 use windows::Win32::Graphics::DirectComposition::{IDCompositionVisual, IDCompositionVisual2};
 use windows::Win32::Graphics::Dwm::{
     DWM_THUMBNAIL_PROPERTIES, DWM_TNP_OPACITY, DWM_TNP_RECTDESTINATION, DWM_TNP_RECTSOURCE,
-    DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE, DWMWA_CLOAKED, DwmFlush, DwmGetWindowAttribute,
+    DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE, DWMWA_CLOAKED, DwmGetWindowAttribute,
 };
 use windows::Win32::Graphics::Gdi::{
     COLOR_DESKTOP, GetMonitorInfoW, GetSysColor, HMONITOR, MONITORINFO,
@@ -18,12 +18,12 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, EnumChildWindows,
-    EnumWindows, GA_PARENT, GA_ROOT, GWL_EXSTYLE, GWL_STYLE, GetAncestor, GetClassNameW, GetParent,
-    GetShellWindow, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId,
-    IsIconic, IsWindowVisible, MSG, PM_REMOVE, PeekMessageW, RegisterClassW, SM_XVIRTUALSCREEN,
-    SM_YVIRTUALSCREEN, SW_SHOWNOACTIVATE, ShowWindow, TranslateMessage, WM_SETTINGCHANGE,
-    WM_THEMECHANGED, WNDCLASSW, WS_CHILD, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_POPUP,
+    EnumWindows, GA_PARENT, GA_ROOT, GA_ROOTOWNER, GWL_EXSTYLE, GWL_STYLE, GetAncestor,
+    GetClassNameW, GetParent, GetShellWindow, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect,
+    GetWindowThreadProcessId, IsIconic, IsWindowVisible, MSG, PM_REMOVE, PeekMessageW,
+    RegisterClassW, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SW_SHOWNOACTIVATE, ShowWindow,
+    TranslateMessage, WM_SETTINGCHANGE, WM_THEMECHANGED, WNDCLASSW, WS_CHILD, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::{BOOL, Error, Interface, Result, w};
 use windows_numerics::{Vector2, Vector3};
@@ -118,6 +118,7 @@ pub(super) struct Scene {
     background: windows::UI::Composition::SpriteVisual,
     desktop: Desktop,
     desktop_visual: IDCompositionVisual2,
+    desktop_visible: bool,
     wrapper: IDCompositionVisual2,
     wallpapers: WallpaperLayers,
     wallpaper: Option<Wallpaper>,
@@ -143,6 +144,7 @@ impl Scene {
         excluded: &[isize],
         bounds: Rect,
         area: Rect,
+        interest: Rect,
         pixel_scale: u32,
     ) -> Result<Self> {
         let invalid_size = || Error::new(E_INVALIDARG, "Invalid backdrop dimensions");
@@ -161,8 +163,14 @@ impl Scene {
         excluded.push(host.0);
         let mut windows = Vec::new();
         let mut hidden_windows = Vec::new();
-        window_stack(&excluded, &mut windows, &mut hidden_windows)?;
         let desktop_windows = desktop_windows()?;
+        window_stack(
+            &excluded,
+            &desktop_windows.roots,
+            interest,
+            &mut windows,
+            &mut hidden_windows,
+        )?;
         let desktop_excluded =
             capture_exclusions(&excluded, &desktop_windows.roots, &hidden_windows);
         let (desktop, visual) = Desktop::new(
@@ -181,10 +189,13 @@ impl Scene {
         let wrapper = unsafe { composition.native.CreateVisual()? };
         let wallpapers =
             WallpaperLayers::new(&composition, host.0, bounds, desktop_windows, false)?;
+        let desktop_visible = !windows.is_empty();
         // SAFETY: The live desktop visual is placed above its wallpaper layers on the same device.
         unsafe {
             wrapper.AddVisual(&wallpapers.visual, false, None::<&IDCompositionVisual>)?;
-            wrapper.AddVisual(&visual, true, &wallpapers.visual)?;
+            if desktop_visible {
+                wrapper.AddVisual(&visual, true, &wallpapers.visual)?;
+            }
         }
         let content: Visual = wrapper.cast()?;
         content.SetSize(vector)?;
@@ -221,6 +232,7 @@ impl Scene {
             background,
             desktop,
             desktop_visual: visual,
+            desktop_visible,
             wrapper,
             wallpapers,
             wallpaper: None,
@@ -281,7 +293,7 @@ impl Scene {
         Ok(())
     }
 
-    pub(super) fn refresh(&mut self) -> Result<()> {
+    pub(super) fn refresh(&mut self, interest: Rect) -> Result<bool> {
         if self.wallpaper_dirty || self.checked.elapsed() >= Duration::from_secs(1) {
             match self.refresh_wallpaper() {
                 Ok(()) => self.refresh_error = None,
@@ -298,69 +310,101 @@ impl Scene {
         }
         window_stack(
             &self.excluded,
+            &self.wallpapers.sources.roots,
+            interest,
             &mut self.pending_windows,
             &mut self.pending_hidden,
         )?;
-        let visibility_changed = self.hidden_windows != self.pending_hidden;
-        if self.windows != self.pending_windows || visibility_changed {
-            let excluded = visibility_changed.then(|| {
-                capture_exclusions(
-                    &self.excluded,
-                    &self.wallpapers.sources.roots,
-                    &self.pending_hidden,
-                )
+        let visibility_changed = self
+            .windows
+            .iter()
+            .map(|window| window.hwnd)
+            .ne(self.pending_windows.iter().map(|window| window.hwnd));
+        if self.windows != self.pending_windows {
+            let hidden_source = self.windows.iter().any(|window| {
+                self.pending_hidden
+                    .binary_search_by_key(&(window.hwnd.0 as usize), |hwnd| hwnd.0 as usize)
+                    .is_ok()
             });
-            self.refresh_desktop(excluded)?;
+            let excluded = capture_exclusions(
+                &self.excluded,
+                &self.wallpapers.sources.roots,
+                &self.pending_hidden,
+            );
+            self.refresh_desktop(excluded, hidden_source, !self.pending_windows.is_empty())?;
             std::mem::swap(&mut self.windows, &mut self.pending_windows);
-            std::mem::swap(&mut self.hidden_windows, &mut self.pending_hidden);
         }
-        Ok(())
+        std::mem::swap(&mut self.hidden_windows, &mut self.pending_hidden);
+        Ok(visibility_changed)
     }
 
-    fn refresh_desktop(&mut self, excluded: Option<Vec<HWND>>) -> Result<()> {
-        let replacement = match self.desktop.refresh(excluded) {
-            Ok(()) => None,
-            Err(error) if error.code() == E_INVALIDARG => {
-                log::warn!("DWM desktop update was invalidated; recreating the source: {error}");
-                Some(
-                    self.desktop
-                        .recreate(&self.composition.native)
-                        .map_err(|error| {
-                            Error::new(error.code(), format!("Recreate shared desktop: {error}"))
-                        })?,
-                )
-            }
-            Err(error) => {
-                return Err(Error::new(
-                    error.code(),
-                    format!("Update shared desktop: {error}"),
-                ));
+    fn refresh_desktop(
+        &mut self,
+        excluded: Vec<HWND>,
+        hidden_source: bool,
+        visible: bool,
+    ) -> Result<()> {
+        let replacement = if hidden_source {
+            Some(
+                self.desktop
+                    .recreate(&self.composition.native, Some(&excluded))?,
+            )
+        } else {
+            match self.desktop.refresh(Some(excluded)) {
+                Ok(()) => None,
+                Err(error) if error.code() == E_INVALIDARG => {
+                    log::warn!(
+                        "DWM desktop update was invalidated; recreating the source: {error}"
+                    );
+                    Some(
+                        self.desktop
+                            .recreate(&self.composition.native, None)
+                            .map_err(|error| {
+                                Error::new(
+                                    error.code(),
+                                    format!("Recreate shared desktop: {error}"),
+                                )
+                            })?,
+                    )
+                }
+                Err(error) => {
+                    return Err(Error::new(
+                        error.code(),
+                        format!("Update shared desktop: {error}"),
+                    ));
+                }
             }
         };
-        // SAFETY: All visuals belong to this compositor. Keep the previous source attached
-        // until the new source has been composed, and synchronize geometry before consuming WGC frames.
+        // SAFETY: Visual replacement is committed atomically on its owning compositor. The old
+        // thumbnail stays alive until that commit completes; geometry-only updates do not wait.
         unsafe {
             if let Some((_, visual)) = &replacement {
-                self.wrapper.AddVisual(visual, true, &self.desktop_visual)?;
+                if self.desktop_visible {
+                    self.wrapper.RemoveVisual(&self.desktop_visual)?;
+                }
+                if visible {
+                    self.wrapper
+                        .AddVisual(visual, true, &self.wallpapers.visual)?;
+                }
+            } else if visible != self.desktop_visible {
+                if visible {
+                    self.wrapper
+                        .AddVisual(&self.desktop_visual, true, &self.wallpapers.visual)?;
+                } else {
+                    self.wrapper.RemoveVisual(&self.desktop_visual)?;
+                }
             }
             self.composition.native.Commit().map_err(|error| {
                 Error::new(error.code(), format!("Commit desktop geometry: {error}"))
             })?;
-            DwmFlush().map_err(|error| {
-                Error::new(
-                    error.code(),
-                    format!("Synchronize desktop geometry: {error}"),
-                )
-            })?;
             if let Some((desktop, visual)) = replacement {
-                self.wrapper.RemoveVisual(&self.desktop_visual)?;
-                self.composition.native.Commit()?;
                 self.composition.native.WaitForCommitCompletion()?;
                 self.desktop_visual = visual;
                 self.desktop = desktop;
-                log::info!("Liquid glass desktop source recovered without restarting capture");
+                log::debug!("Liquid glass desktop source replaced");
             }
         }
+        self.desktop_visible = visible;
         Ok(())
     }
 
@@ -404,7 +448,7 @@ impl Scene {
             // old thumbnails remain registered until the replacement has reached DWM.
             unsafe {
                 self.wrapper
-                    .AddVisual(&next.visual, false, &self.desktop_visual)?;
+                    .AddVisual(&next.visual, false, None::<&IDCompositionVisual>)?;
                 self.wrapper.RemoveVisual(&self.wallpapers.visual)?;
                 self.composition.native.Commit()?;
                 self.composition.native.WaitForCommitCompletion()?;
@@ -762,11 +806,15 @@ fn capture_exclusions(owned: &[HWND], shell: &[HWND], hidden: &[HWND]) -> Vec<HW
 
 fn window_stack(
     excluded: &[HWND],
+    shell: &[HWND],
+    interest: Rect,
     windows: &mut Vec<DesktopWindow>,
     hidden: &mut Vec<HWND>,
 ) -> Result<()> {
     struct Enumeration<'a> {
         excluded: &'a [HWND],
+        shell: &'a [HWND],
+        interest: Rect,
         windows: &'a mut Vec<DesktopWindow>,
         hidden: &'a mut Vec<HWND>,
     }
@@ -776,16 +824,30 @@ fn window_stack(
         let mut rect = RECT::default();
         // SAFETY: HWND is supplied by EnumWindows; these calls only query window state.
         unsafe {
-            if enumeration.excluded.contains(&hwnd) {
+            if enumeration.excluded.contains(&hwnd) || enumeration.shell.contains(&hwnd) {
                 return true.into();
             }
             if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
                 enumeration.hidden.push(hwnd);
                 return true.into();
             }
+            let owner = GetAncestor(hwnd, GA_ROOTOWNER);
+            if !owner.is_invalid() && owner != hwnd && IsIconic(owner).as_bool() {
+                enumeration.hidden.push(hwnd);
+                return true.into();
+            }
             if GetWindowRect(hwnd, &mut rect).is_err() {
                 return true.into();
             }
+        }
+        let bounds = Rect {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+        };
+        if rect_size(intersection(bounds, enumeration.interest)).is_none() {
+            return true.into();
         }
         let mut cloaked = 0_u32;
         // SAFETY: The output is correctly sized; a closed window is ignored by the next refresh.
@@ -803,21 +865,15 @@ fn window_stack(
             enumeration.hidden.push(hwnd);
             return true.into();
         }
-        enumeration.windows.push(DesktopWindow {
-            hwnd,
-            bounds: Rect {
-                left: rect.left,
-                top: rect.top,
-                right: rect.right,
-                bottom: rect.bottom,
-            },
-        });
+        enumeration.windows.push(DesktopWindow { hwnd, bounds });
         true.into()
     }
     windows.clear();
     hidden.clear();
     let mut enumeration = Enumeration {
         excluded,
+        shell,
+        interest,
         windows,
         hidden,
     };

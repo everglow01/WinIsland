@@ -354,6 +354,7 @@ struct Session {
     snapshot: ID3D11Texture2D,
     last_frame: Instant,
     next_frame: Instant,
+    fresh_after: Option<Instant>,
     ready: bool,
 }
 
@@ -372,8 +373,15 @@ impl Session {
             Width: i32::try_from(size.0).map_err(|error| error.to_string())?,
             Height: i32::try_from(size.1).map_err(|error| error.to_string())?,
         };
-        let scene = Scene::new(graphics, excluded, bounds, area, request.pixel_scale)
-            .map_err(|error| format!("Desktop composition source failed: {error}"))?;
+        let scene = Scene::new(
+            graphics,
+            excluded,
+            bounds,
+            area,
+            request.interest,
+            request.pixel_scale,
+        )
+        .map_err(|error| format!("Desktop composition source failed: {error}"))?;
         let stream = Stream::new(graphics, &scene, content_size, request.rate_hz, shared)
             .map_err(|error| format!("Desktop visual capture failed: {error}"))?;
         let snapshot = graphics.texture(size.0, size.1)?;
@@ -394,6 +402,7 @@ impl Session {
             snapshot,
             last_frame: Instant::now(),
             next_frame: Instant::now(),
+            fresh_after: None,
             ready: false,
         })
     }
@@ -415,9 +424,18 @@ impl Session {
         arrived: bool,
     ) -> Result<bool, String> {
         if refresh {
-            self.scene
-                .refresh()
-                .map_err(|error| format!("Desktop visual refresh failed: {error}"))?;
+            let changed_at = Instant::now();
+            if self
+                .scene
+                .refresh(request.interest)
+                .map_err(|error| format!("Desktop visual refresh failed: {error}"))?
+            {
+                if self.fresh_after.is_none() {
+                    self.last_frame = changed_at;
+                }
+                self.fresh_after = Some(changed_at);
+                self.next_frame = changed_at;
+            }
         }
         self.receive_frame(request, shared, refresh, arrived)
     }
@@ -466,9 +484,10 @@ impl Session {
             self.next_frame = Instant::now();
             shared.latest.lock().frame = None;
         }
-        // An unchanged desktop can stop producing frames. Only an initial or resized frame is overdue.
-        if !self.ready && self.last_frame.elapsed() >= FRAME_TIMEOUT {
-            return Err("Desktop visual did not produce an initial frame".into());
+        // An unchanged desktop can stop producing frames; invalidated content still needs a fresh frame.
+        if (!self.ready || self.fresh_after.is_some()) && self.last_frame.elapsed() >= FRAME_TIMEOUT
+        {
+            return Err("Desktop visual did not produce a fresh frame".into());
         }
         if !arrived && !refresh {
             return Ok(self.ready);
@@ -482,6 +501,13 @@ impl Session {
             return Ok(self.ready);
         };
         let frame = frame?;
+        let captured_at = frame_time(&frame);
+        if self
+            .fresh_after
+            .is_some_and(|after| captured_at.is_some_and(|at| at < after))
+        {
+            return Ok(self.ready);
+        }
         let access: IDirect3DDxgiInterfaceAccess = frame
             .0
             .Surface()
@@ -513,7 +539,6 @@ impl Session {
             back: 1,
             ..Default::default()
         };
-        let captured_at = frame_time(&frame);
         {
             let mut latest = shared.latest.lock();
             // SAFETY: The checked BGRA region fits both textures on this device. Holding latest
@@ -543,6 +568,7 @@ impl Session {
             latest.sequence = latest.sequence.wrapping_add(1);
         }
         self.ready = true;
+        self.fresh_after = None;
         self.last_frame = Instant::now();
         let interval = Duration::from_secs_f64(1.0 / f64::from(request.rate_hz));
         let next = self.next_frame + interval;
