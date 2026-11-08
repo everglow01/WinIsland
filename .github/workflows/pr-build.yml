@@ -34,7 +34,7 @@ jobs:
         run: |
           changed=$(git diff --name-only "$BASE_SHA...HEAD")
           printf '%s\n' "$changed"
-          if printf '%s\n' "$changed" | grep -E '\.(rs|sksl)$|(^|/)Cargo\.(toml|lock)$|^resources/|^\.github/workflows/pr-build\.yml$' > /dev/null; then
+          if printf '%s\n' "$changed" | grep -E '\.(rs|sksl)$|(^|/)Cargo\.(toml|lock)$|^resources/|^packaging/Prepare-SpeechRuntime\.ps1$|^\.github/workflows/pr-build\.yml$' > /dev/null; then
             echo "rust=true" >> "$GITHUB_OUTPUT"
           else
             echo "rust=false" >> "$GITHUB_OUTPUT"
@@ -53,7 +53,9 @@ jobs:
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
 
-      - name: Rebuild speech runtime after cache restore
+      - name: Prepare speech runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: ./packaging/Prepare-SpeechRuntime.ps1
 
       - name: Build (release)

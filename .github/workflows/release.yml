@@ -103,7 +103,9 @@ jobs:
       run: |
         choco install ninja innosetup -y
 
-    - name: Rebuild speech runtime after cache restore
+    - name: Prepare speech runtime
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: ./packaging/Prepare-SpeechRuntime.ps1
 
     - name: Build Release
