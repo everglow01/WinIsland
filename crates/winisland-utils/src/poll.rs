@@ -143,6 +143,16 @@ impl<T> Job<T> {
     }
 }
 
+impl<T, E> Job<Result<T, E>> {
+    /// Flattens a fallible job, mapping an aborted worker to the caller's error.
+    pub fn poll_result(&mut self, on_abort: impl FnOnce() -> E) -> Option<Result<T, E>> {
+        Some(match self.poll()? {
+            Ok(result) => result,
+            Err(Aborted) => Err(on_abort()),
+        })
+    }
+}
+
 impl<T: Send + 'static> Job<T> {
     /// Runs `work` on a new thread.
     pub fn spawn(work: impl FnOnce() -> T + Send + 'static) -> Self {

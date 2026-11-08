@@ -4,8 +4,8 @@ mod visual;
 mod widget_layout;
 mod widgets;
 
-use educe::Educe;
 use serde::{Deserialize, Serialize};
+use winisland_utils::Educe;
 use winisland_utils::settings::Settings;
 
 pub use lyrics::*;

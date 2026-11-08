@@ -1,4 +1,5 @@
 use std::time::{Duration, Instant};
+use winisland_utils::timing::take_elapsed;
 
 use winisland_platform::{
     AppHandler, BackdropShape, HostBackdropParams, InputState, MouseButton, PlatformEvent, Theme,
@@ -177,9 +178,10 @@ impl App {
                     let island_layout = self.compute_island_layout();
                     let is_hidden = self.is_hidden();
                     if let Some(mut renderer) = self.renderer.take() {
-                        let dt =
-                            (self.last_render_time.elapsed().as_secs_f32() * 60.0).clamp(0.1, 6.0);
-                        self.last_render_time = Instant::now();
+                        let dt = (take_elapsed(&mut self.last_render_time, Instant::now())
+                            .as_secs_f32()
+                            * 60.0)
+                            .clamp(0.1, 6.0);
                         let sigmas = if self.config.motion_blur {
                             calculate_blur_sigmas(
                                 self.springs.w.velocity,

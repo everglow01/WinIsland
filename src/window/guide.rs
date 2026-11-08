@@ -1,5 +1,6 @@
 use std::cell::{OnceCell, RefCell};
 use std::time::{Duration, Instant};
+use winisland_utils::timing::take_elapsed;
 
 use winisland_core::i18n::tr;
 use winisland_platform::{
@@ -632,11 +633,9 @@ impl GuideApp {
 
     fn advance(&mut self) {
         let now = Instant::now();
-        let dt = now
-            .saturating_duration_since(self.last_frame)
+        let dt = take_elapsed(&mut self.last_frame, now)
             .as_secs_f32()
             .min(0.1);
-        self.last_frame = now;
         let blend = 1.0 - (-dt * HOVER_RATE).exp();
         for index in 0..PAGES.len() {
             let target = self.tab_hover_target(index);

@@ -1,4 +1,4 @@
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct SwitchAnimator {
     positions: Vec<f32>,
     targets: Vec<f32>,

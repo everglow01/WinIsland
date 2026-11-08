@@ -5614,7 +5614,6 @@ name = "winisland-core"
 version = "2.0.1"
 dependencies = [
  "base64 0.23.1",
- "educe",
  "encoding_rs",
  "fuzzengine",
  "log",
@@ -5742,6 +5741,7 @@ dependencies = [
 name = "winisland-utils"
 version = "2.0.1"
 dependencies = [
+ "educe",
  "log",
  "parking_lot",
  "winisland-utils-derive",

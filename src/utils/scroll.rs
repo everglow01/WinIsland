@@ -3,6 +3,7 @@ use winisland_render::FontStyle;
 use winisland_render::text::{DrawTextCachedParams, FontManager};
 use winisland_render::{BlurSpec, Rgba};
 use winisland_render::{Painter, Rect};
+use winisland_utils::timing::take_elapsed;
 
 pub struct ScrollDrawParams<'a> {
     pub painter: Painter<'a>,
@@ -61,8 +62,9 @@ impl ScrollText {
             self.pause = 2.0;
         }
 
-        let dt = self.last_time.elapsed().as_secs_f32().clamp(0.0, 0.1);
-        self.last_time = Instant::now();
+        let dt = take_elapsed(&mut self.last_time, Instant::now())
+            .as_secs_f32()
+            .clamp(0.0, 0.1);
 
         let full_w = FontManager::global().measure_text_cached(text, size, style);
 
