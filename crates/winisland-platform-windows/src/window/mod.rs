@@ -525,7 +525,10 @@ impl WindowSystem for WindowsWindowSystem {
     fn native_surface(&self, id: WindowId) -> Option<NativeSurface> {
         let window = get_window(id)?;
         let hwnd = window_hwnd(&window)?;
-        Some(NativeSurface::from_win32_hwnd(hwnd, Some(window)))
+        Some(
+            NativeSurface::from_win32_hwnd(hwnd, Some(window))
+                .with_redraw_callback(Arc::new(move || r#loop::request_redraw(id))),
+        )
     }
 
     fn apply_overlay_styles(&self, id: WindowId, styles: OverlayStyles) {
@@ -737,8 +740,14 @@ impl WindowSystem for WindowsWindowSystem {
                     .ok_or(PlatformError::Unavailable("overlay handle"))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let capture =
-            Rc::new(BackdropCapture::new(&handles, adapter_luid).map_err(PlatformError::Backend)?);
+        let capture = Rc::new(
+            BackdropCapture::new(
+                &handles,
+                adapter_luid,
+                Arc::new(move || r#loop::request_redraw(id)),
+            )
+            .map_err(PlatformError::Backend)?,
+        );
         WINDOWS.with(|windows| {
             if let Some(record) = windows.borrow_mut().get_mut(&id) {
                 record.backdrop_capture = Some(capture);

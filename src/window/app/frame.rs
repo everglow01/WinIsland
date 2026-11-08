@@ -41,7 +41,6 @@ impl App {
         if !is_left_button_pressed() {
             self.plugin_ui.pressed_buttons &= !(1 << 1);
         }
-        self.update_plugin_services();
         let window = match self.window {
             Some(w) => w,
             None => return,
@@ -58,6 +57,7 @@ impl App {
         if now < self.next_frame_deadline {
             return;
         }
+        self.update_plugin_services();
         if !self.display_transition
             && self
                 .geom
@@ -1236,7 +1236,6 @@ impl App {
                 || self.plugin_ui.pressed_buttons != 0
                 || self.plugin_ui.touch_id.is_some(),
             resource_updates: resource_usage_active,
-            expanded: self.expanded,
             playback: playback_active,
             dynamic_background: dynamic_effect_active,
         });

@@ -163,6 +163,17 @@ impl App {
                     }
                 }
                 PlatformEvent::RedrawRequested { .. } => {
+                    if let Some(renderer) = &mut self.renderer {
+                        let target = renderer.main_target();
+                        match renderer.prepare_frame(target) {
+                            Ok(true) => {}
+                            Ok(false) => return,
+                            Err(error) => {
+                                self.invalidate_renderer(&error.to_string(), Instant::now());
+                                return;
+                            }
+                        }
+                    }
                     let island_layout = self.compute_island_layout();
                     let is_hidden = self.is_hidden();
                     if let Some(mut renderer) = self.renderer.take() {
@@ -609,6 +620,8 @@ impl App {
                         self.renderer = Some(renderer);
                         if let Err(error) = render_result {
                             self.invalidate_renderer(&error.to_string(), Instant::now());
+                        } else {
+                            self.memory.frame_presented(Instant::now());
                         }
                     }
                 }

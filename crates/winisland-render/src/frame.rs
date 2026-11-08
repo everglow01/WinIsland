@@ -334,6 +334,21 @@ impl Renderer {
         self.backdrop = None;
     }
 
+    /// Returns false while presentation is busy and arranges a redraw when the surface is ready.
+    pub fn prepare_frame(&mut self, target_id: RendererTargetId) -> RenderResult<bool> {
+        let result = (|| {
+            self.check_ready()?;
+            self.targets
+                .get_mut(&target_id)
+                .ok_or_else(|| {
+                    RenderError::Backend("D3D12 render target is unavailable".to_string())
+                })?
+                .prepare_frame()
+        })();
+        self.record_result(result)
+    }
+
+    /// Draw after `prepare_frame` returns true; a busy target keeps its most recent frame.
     pub fn frame<T>(
         &mut self,
         target_id: RendererTargetId,

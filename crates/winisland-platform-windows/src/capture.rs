@@ -133,12 +133,12 @@ struct Control {
     frame_arrived: bool,
 }
 
-#[derive(Default)]
 struct Shared {
     control: Mutex<Control>,
     changed: Condvar,
     latest: Mutex<Latest>,
     pending: AtomicBool,
+    redraw: Arc<dyn Fn() + Send + Sync>,
 }
 
 impl Shared {
@@ -152,7 +152,7 @@ impl Shared {
 
     fn wake(&self) {
         if !self.pending.swap(true, Ordering::AcqRel) {
-            crate::window::wake();
+            (self.redraw)();
         }
     }
 }
@@ -177,11 +177,21 @@ pub(crate) struct BackdropCapture {
 }
 
 impl BackdropCapture {
-    pub(crate) fn new(windows: &[HWND], adapter_luid: u64) -> Result<Self, String> {
+    pub(crate) fn new(
+        windows: &[HWND],
+        adapter_luid: u64,
+        redraw: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<Self, String> {
         let hwnd = *windows.first().ok_or("Overlay window is missing")?;
         let graphics = Arc::new(Graphics::new(adapter_luid)?);
         let excluded = windows.iter().map(|hwnd| hwnd.0 as isize).collect();
-        let shared = Arc::new(Shared::default());
+        let shared = Arc::new(Shared {
+            control: Mutex::default(),
+            changed: Condvar::default(),
+            latest: Mutex::default(),
+            pending: AtomicBool::new(false),
+            redraw,
+        });
         let worker_graphics = Arc::clone(&graphics);
         let worker_shared = Arc::clone(&shared);
         let worker = std::thread::Builder::new()

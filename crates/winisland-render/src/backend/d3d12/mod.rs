@@ -15,6 +15,7 @@ use crate::error::RenderResult;
 use crate::surface::NativeSurface;
 
 mod backdrop;
+mod pacing;
 mod target;
 pub(crate) use backdrop::SharedBackdrop;
 pub(crate) use target::RenderTarget;

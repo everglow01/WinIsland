@@ -16,6 +16,7 @@ pub struct NativeSurface {
     tag: u32,
     handle: usize,
     keepalive: Option<Arc<dyn Any + Send + Sync>>,
+    redraw: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl NativeSurface {
@@ -25,7 +26,18 @@ impl NativeSurface {
             tag: SURFACE_TAG_WIN32_HWND,
             handle: hwnd,
             keepalive,
+            redraw: None,
         }
+    }
+
+    /// Installs a redraw notification that can run on a worker thread and must not block or panic.
+    pub fn with_redraw_callback(mut self, redraw: Arc<dyn Fn() + Send + Sync>) -> Self {
+        self.redraw = Some(redraw);
+        self
+    }
+
+    pub fn redraw_callback(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
+        self.redraw.clone()
     }
 
     /// Returns the backend tag without transferring ownership.

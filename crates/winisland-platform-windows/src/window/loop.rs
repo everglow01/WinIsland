@@ -25,9 +25,16 @@ use winit::window::{Theme as WinitTheme, WindowId as WinitWindowId};
 
 use crate::display::WindowsDisplay;
 
-static PROXY: OnceLock<EventLoopProxy<()>> = OnceLock::new();
+static PROXY: OnceLock<EventLoopProxy<LoopEvent>> = OnceLock::new();
 static WAKE_PENDING: AtomicBool = AtomicBool::new(false);
+static POLL_PENDING: AtomicBool = AtomicBool::new(false);
 static COMPOSITION_CHANGED: AtomicBool = AtomicBool::new(false);
+
+enum LoopEvent {
+    Wake,
+    Poll,
+    Redraw(WindowId),
+}
 
 thread_local! {
     static ACTIVE_EVENT_LOOP: Cell<*const ActiveEventLoop> = const { Cell::new(std::ptr::null()) };
@@ -39,13 +46,28 @@ pub fn wake() {
     let Some(proxy) = PROXY.get() else {
         return;
     };
-    if !WAKE_PENDING.swap(true, Ordering::AcqRel) && proxy.send_event(()).is_err() {
+    if !WAKE_PENDING.swap(true, Ordering::AcqRel) && proxy.send_event(LoopEvent::Wake).is_err() {
         WAKE_PENDING.store(false, Ordering::Release);
     }
 }
 
+fn poll() {
+    let Some(proxy) = PROXY.get() else {
+        return;
+    };
+    if !POLL_PENDING.swap(true, Ordering::AcqRel) && proxy.send_event(LoopEvent::Poll).is_err() {
+        POLL_PENDING.store(false, Ordering::Release);
+    }
+}
+
+pub(super) fn request_redraw(id: WindowId) {
+    if let Some(proxy) = PROXY.get() {
+        let _ = proxy.send_event(LoopEvent::Redraw(id));
+    }
+}
+
 pub(super) fn run(handler: &mut dyn AppHandler) -> Result<(), PlatformError> {
-    let mut builder = EventLoop::<()>::builder();
+    let mut builder = EventLoop::<LoopEvent>::with_user_event();
     builder.with_msg_hook(|message| {
         if !message.is_null() {
             // SAFETY: winit supplies a valid MSG pointer for this synchronous callback.
@@ -203,7 +225,7 @@ impl Drop for CoalescedTimer {
 
 unsafe extern "system" fn timer_elapsed(_window: HWND, _message: u32, timer: usize, _time: u32) {
     if COALESCED_TIMER_ID.with(|id| id.get() != 0 && id.get() == timer) {
-        wake();
+        poll();
     }
 }
 
@@ -236,7 +258,7 @@ impl EventAdapter<'_> {
     }
 }
 
-impl ApplicationHandler<()> for EventAdapter<'_> {
+impl ApplicationHandler<LoopEvent> for EventAdapter<'_> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         scope_active_event_loop(event_loop, || {
             self.handler.on_event(PlatformEvent::Resumed);
@@ -292,11 +314,21 @@ impl ApplicationHandler<()> for EventAdapter<'_> {
         });
     }
 
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, _event: ()) {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: LoopEvent) {
         scope_active_event_loop(event_loop, || {
-            WAKE_PENDING.store(false, Ordering::Release);
+            match event {
+                LoopEvent::Wake => WAKE_PENDING.store(false, Ordering::Release),
+                LoopEvent::Poll => POLL_PENDING.store(false, Ordering::Release),
+                LoopEvent::Redraw(_) => {}
+            }
             self.composition_changed();
-            self.handler.on_event(PlatformEvent::Wake);
+            match event {
+                LoopEvent::Wake => self.handler.on_event(PlatformEvent::Wake),
+                LoopEvent::Poll => {}
+                LoopEvent::Redraw(id) => {
+                    let _ = super::with_window(id, winit::window::Window::request_redraw);
+                }
+            }
             self.advance(event_loop);
         });
     }
