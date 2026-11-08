@@ -54,7 +54,7 @@ jobs:
         uses: swatinem/rust-cache@v2
 
       - name: Rebuild speech runtime after cache restore
-        run: cargo clean --release --package sherpa-onnx-sys
+        run: ./packaging/Prepare-SpeechRuntime.ps1
 
       - name: Build (release)
         run: cargo build --release --locked --verbose
