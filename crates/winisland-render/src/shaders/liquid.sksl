@@ -1,6 +1,5 @@
 uniform shader backdrop;
 
-uniform float4 shape0;
 uniform float2 corner0;
 uniform float4 shape1;
 uniform float2 corner1;
@@ -25,16 +24,12 @@ uniform float4 shadow;
 uniform float shadowAlpha;
 uniform float opacity;
 uniform float blackFade;
-uniform float rimReach;
-uniform float4 lingosoul;
-uniform float4 lingosoulWave;
 
 const float kEpsilon = 0.0001;
 const float kUnionDepth = 0.25;
 const float kMaxSlope = 11.430052;
 const float kEdgeOffset = 0.7;
 const float kEdgeSoftness = 0.6;
-const float kEdgeReach = 1.0;
 
 float roundRect(float2 p, float4 s, float2 c, out float2 g) {
     float2 sgn = float2(p.x < s.x ? -1.0 : 1.0, p.y < s.y ? -1.0 : 1.0);
@@ -126,8 +121,7 @@ float underlay(float2 p, float d, float2 g, float coverage) {
 }
 
 // LingoSoul glass and spindle waves ported from https://github.com/neeldedkawala/ios-siri-animation
-// Copyright (c) 2026 Neel Dedkawala. MIT license: ../licenses/ios-siri-animation-LICENSE.
-const float kLingoSoulUnitWidth = 53.0;
+// Copyright (c) 2026 Neel Dedkawala. MIT license: ../../licenses/ios-siri-animation-LICENSE.
 const float kLingoSoulBezel = 58.0;
 const float kLingoSoulThickness = 31.0;
 const float kLingoSoulIor = 3.05;
@@ -136,22 +130,6 @@ const float kLingoSoulCurvature = 8.0;
 const float kLingoSoulScaleRatio = 3.8;
 const float kLingoSoulRimWidth = 1.4;
 const float kLingoSoulRimIntensity = 0.97;
-const float kLingoSoulWaveRefract = 6.3;
-const float kLingoSoulWaveDispersion = 15.0;
-const float kLingoSoulWaveEdgeBand = 4.5;
-const float kLingoSoulWavePower = 1.55;
-const float kLingoSoulLineThickness = 0.056;
-const float kLingoSoulSpindleWidth = 2.3;
-const float kLingoSoulPinTaper = 2.8;
-const float kLingoSoulYScale = 0.11;
-const float kLingoSoulXScale = 1.6;
-const float kLingoSoulGlowFalloff = 1.5;
-const float kLingoSoulGlowIntensity = 1.15;
-const float kLingoSoulEdgeFade = 0.42;
-const float kLingoSoulHotCoreThreshold = 7.2;
-const float kLingoSoulHotCoreIntensity = 3.2;
-const float kLingoSoulPhaseDistance = -4.1;
-const float kLingoSoulIntroStartAmp = 0.2;
 
 float lingosoulSnell(float d, float bezel, float thickness, float n, out float height) {
     if (d >= bezel || d <= 0.0) {
@@ -166,69 +144,6 @@ float lingosoulSnell(float d, float bezel, float thickness, float n, out float h
     float theta1 = atan(slope);
     float theta2 = asin(clamp(sin(theta1) / max(n, 1.001), -0.999, 0.999));
     return height * tan(theta1 - theta2);
-}
-
-float3 lingosoulWaves(float2 local, float2 normal, float inward, float unit) {
-    float fade = lingosoul.x;
-    if (fade <= 0.001) {
-        return float3(0.0);
-    }
-    float progress = lingosoul.w;
-    float time = lingosoulWave.y;
-    float intro = lingosoulWave.x;
-    float energy = smoothstep(0.015, 0.6, lingosoul.z);
-    float edgeZone = clamp(1.0 - inward / max(kLingoSoulWaveEdgeBand * unit, 1.0), 0.0, 1.0);
-    float edgeMask = pow(edgeZone, kLingoSoulWavePower);
-    float3 accum = float3(0.0);
-    float density = 0.0;
-    float crossings = 0.0;
-    for (int i = 0; i < 4; i++) {
-        float fi = float(i);
-        float ampWeight = i == 0 ? 1.30 : i == 1 ? 0.70 : i == 2 ? 1.22 : 0.72;
-        float thickWeight = i == 0 ? 1.35 : i == 1 ? 0.72 : i == 2 ? 1.30 : 0.75;
-        float phaseWeight = i == 0 ? 0.0 : i == 1 ? 0.38 : i == 2 ? 0.75 : 1.15;
-        float start = fi / 3.0 * 0.42;
-        float raw = clamp((intro - start) / 0.58, 0.0, 1.0);
-        float waveProgress = raw * raw * (3.0 - 2.0 * raw);
-        float dispersionOffset = (fi - 1.5) * (kLingoSoulWaveDispersion * 0.25);
-        float displacement = edgeZone * kLingoSoulWaveRefract * 4.0 + dispersionOffset * edgeMask;
-        float2 shifted = local - normal * (displacement * edgeMask * progress * unit);
-        float2 wp = float2(shifted.x, shifted.y + 0.5 * progress * unit) / (kLingoSoulUnitWidth * unit);
-        float nx = wp.x / kLingoSoulSpindleWidth + 0.5;
-        if (nx > 0.0 && nx < 1.0) {
-            float envelope = pow(sin(nx * 3.14159265), kLingoSoulPinTaper);
-            float fadeMask = smoothstep(0.0, kLingoSoulEdgeFade, nx) * smoothstep(1.0, 1.0 - kLingoSoulEdgeFade, nx);
-            float harmonic = 1.0 + 0.12 * sin(time * 1.5 + fi * 1.3);
-            float goal = ampWeight * harmonic * mix(0.55, 1.0, energy);
-            float amp = mix(kLingoSoulIntroStartAmp, goal, waveProgress) * kLingoSoulYScale * envelope;
-            float phase = kLingoSoulPhaseDistance * phaseWeight * waveProgress;
-            float waveY = sin(wp.x * kLingoSoulXScale + time + phase) * amp;
-            float dist = abs(wp.y + waveY);
-            float thick = kLingoSoulLineThickness * envelope * mix(1.0, thickWeight, waveProgress);
-            float w = pow(clamp(thick / (dist + thick * 0.32), 0.0, 1.0), kLingoSoulGlowFalloff);
-            float lineOffset = wp.y + waveY + (fi - 1.5) * thick * 0.75 * envelope - 0.14 * shape0.w / (kLingoSoulUnitWidth * unit);
-            float soft = thick * 2.6;
-            float patch = 0.3 + 0.7 * smoothstep(-0.2, 0.9, sin(wp.x * 2.1 - time * 0.3 + fi * 1.9));
-            float prism = smoothstep(0.55, 0.95, sin(wp.x * 2.1 - time * 0.3 + fi * 1.9));
-            float split = soft * (0.24 * patch + 0.55 * prism);
-            float red = exp(-pow((lineOffset + split * (0.15 + 0.45 * prism)) / soft, 2.0));
-            float green = exp(-pow((lineOffset - split * 0.35) / soft, 2.0));
-            float blue = exp(-pow((lineOffset - split * 1.2) / soft, 2.0));
-            float core = exp(-pow(lineOffset / max(thick * 0.35, 1e-4), 2.0));
-            float halo = exp(-abs(lineOffset) / max(thick * 2.6, 1e-4));
-            float3 color = float3(red, green * 0.98, blue * 0.95) * 0.18
-                + float3(core) * 0.05
-                + float3(1.0, 0.97, 0.92) * halo * 0.085;
-            accum += color * fadeMask;
-            density += w * fadeMask;
-            crossings += smoothstep(thick * 2.2, 0.0, dist);
-        }
-    }
-    if (density > kLingoSoulHotCoreThreshold && crossings >= 2.6) {
-        float white = smoothstep(kLingoSoulHotCoreThreshold, kLingoSoulHotCoreThreshold + 3.0, density);
-        accum = mix(accum, float3(kLingoSoulHotCoreIntensity), white * 0.85);
-    }
-    return accum * kLingoSoulGlowIntensity * fade;
 }
 
 float3 lingosoulBody(float2 p, float inward, float2 g) {
@@ -333,22 +248,5 @@ half4 main(float2 p) {
 
     float2 g;
     float d = scene(p, g);
-    float outer = max(stroke.x + stroke.z, kEdgeOffset + kEdgeSoftness) + kEdgeReach;
-    bool edge = d >= -rimReach && d <= outer;
-    float samples = edge ? 4.0 : 1.0;
-    float2 offset = edge ? float2(0.125, 0.375) : float2(0.0);
-    half4 sum = half4(0.0);
-    for (int i = 0; i < 4; i++) {
-        if (float(i) >= samples) {
-            break;
-        }
-        float2 q = p + offset;
-        float dq = d;
-        if (edge) {
-            dq = scene(q, g);
-        }
-        sum += shade(q, dq, g, t, pulse, coverage);
-        offset = float2(-offset.y, offset.x);
-    }
-    return sum / half(samples);
+    return shade(p, d, g, t, pulse, coverage);
 }

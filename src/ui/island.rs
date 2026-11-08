@@ -359,6 +359,15 @@ fn draw_background_layer(
         host_backdrop: params.style.host_backdrop,
         media: params.media.backdrop,
     });
+    let lingosoul = &params.style.lingosoul;
+    if lingosoul.drop > 0.001 && lingosoul.wave_fade > 0.001 {
+        let mut material = LiquidMaterial::island(params.layout.compact_scale);
+        apply_lingosoul_drop(&mut material, lingosoul, params.layout.compact_scale);
+        let saved = painter.save();
+        painter.clip_path(&params.surface.primary);
+        painter.draw_lingosoul_waves(rect, &material, 1.0 - params.layout.hide_progress);
+        painter.restore_to(saved);
+    }
 }
 
 fn draw_expanded_layer(
