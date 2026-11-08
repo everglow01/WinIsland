@@ -53,6 +53,10 @@ impl SettingsApp {
             page.setting(&self.config, AppConfigField::LyricsMode, true);
             page.setting(&self.config, AppConfigField::ShowLyrics, true);
             if show_lyrics {
+                page.setting(&self.config, AppConfigField::LyricsFuzzySearch, true);
+                if self.config.lyrics_fuzzy_search {
+                    page.row_label(tr("lyrics_fuzzy_search_note"));
+                }
                 page.setting(&self.config, AppConfigField::ShowSecondaryLyrics, true);
             }
             if self.config.lyrics_mode == "lrc" {

@@ -29,13 +29,15 @@ pub(super) async fn fetch(
     title: &str,
     artist: &str,
     duration_secs: u64,
+    fuzzy: bool,
 ) -> Option<Arc<Vec<LyricLine>>> {
+    let duration_secs = if fuzzy { 0 } else { duration_secs };
     match source {
-        "amll" => amll::fetch(title, artist).await,
-        "qq" => qq::fetch(title, artist, duration_secs).await,
-        "kugou" => kugou::fetch(title, artist, duration_secs).await,
-        "lrclib" => lrclib::fetch(title, artist, duration_secs).await,
-        _ => netease::fetch(title, artist, duration_secs).await,
+        "amll" => amll::fetch(title, artist, fuzzy).await,
+        "qq" => qq::fetch(title, artist, duration_secs, fuzzy).await,
+        "kugou" => kugou::fetch(title, artist, duration_secs, fuzzy).await,
+        "lrclib" => lrclib::fetch(title, artist, duration_secs, fuzzy).await,
+        _ => netease::fetch(title, artist, duration_secs, fuzzy).await,
     }
 }
 

@@ -612,6 +612,8 @@ impl App {
                     self.smtc
                         .set_lyrics_source(self.config.lyrics_source.clone());
                     self.smtc
+                        .set_lyrics_fuzzy_search(self.config.lyrics_fuzzy_search);
+                    self.smtc
                         .set_lyrics_local_dir(self.config.lyrics_local_dir.clone());
                     self.smtc
                         .set_show_secondary_lyrics(self.config.show_secondary_lyrics);

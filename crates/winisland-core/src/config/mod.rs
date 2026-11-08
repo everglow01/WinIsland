@@ -92,6 +92,8 @@ pub struct AppConfig {
     #[setting(toggle)]
     pub show_lyrics: bool,
     #[setting(toggle)]
+    pub lyrics_fuzzy_search: bool,
+    #[setting(toggle)]
     pub show_secondary_lyrics: bool,
     #[educe(Default = "online")]
     #[setting(choice("online" => "lyrics_mode_online", "lrc" => "lyrics_mode_lrc"))]

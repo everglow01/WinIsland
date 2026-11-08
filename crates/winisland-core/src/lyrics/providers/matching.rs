@@ -2,7 +2,9 @@ use std::cmp::Reverse;
 
 use serde_json::Value;
 
-use crate::lyrics::{MatchKey, normalize_match_text, simplify_chinese, split_artists};
+use crate::lyrics::{
+    MatchKey, fuzzy_title_score, normalize_match_text, simplify_chinese, split_artists,
+};
 
 pub(super) struct SongQuery {
     raw_title: String,
@@ -10,16 +12,18 @@ pub(super) struct SongQuery {
     artist: String,
     edition: u16,
     duration_secs: u64,
+    fuzzy: bool,
 }
 
 impl SongQuery {
-    pub(super) fn new(title: &str, artist: &str, duration_secs: u64) -> Self {
+    pub(super) fn new(title: &str, artist: &str, duration_secs: u64, fuzzy: bool) -> Self {
         Self {
             raw_title: title.trim().to_string(),
             title: MatchKey::new(title),
             artist: artist.to_string(),
             edition: edition_flags(title),
-            duration_secs,
+            duration_secs: if fuzzy { 0 } else { duration_secs },
+            fuzzy,
         }
     }
 
@@ -48,7 +52,7 @@ impl SongQuery {
     }
 
     pub(super) fn accepts_edition(&self, title: &str) -> bool {
-        self.edition == edition_flags(title)
+        self.fuzzy || self.edition == edition_flags(title)
     }
 
     pub(super) fn score<'a>(
@@ -84,6 +88,8 @@ impl SongQuery {
             && ratio(&self.title.compact, &candidate.compact) >= 0.94
         {
             220
+        } else if self.fuzzy {
+            100 + fuzzy_title_score(&candidate, &self.title, &MatchKey::new(&self.artist), true)?
         } else {
             return None;
         };
@@ -102,17 +108,19 @@ impl SongQuery {
         }
         let duration_match = self.duration_secs > 0
             && duration_secs.is_some_and(|duration| duration.abs_diff(self.duration_secs) <= 5);
-        if !self.artist.trim().is_empty()
+        if !self.fuzzy
+            && !self.artist.trim().is_empty()
             && !artist_match
             && (!artists.is_empty() || !duration_match || title_score < 280)
         {
             return None;
         }
-        if title_score < 260 && !artist_match && !duration_match {
+        if !self.fuzzy && title_score < 260 && !artist_match && !duration_match {
             return None;
         }
         let duration_score = if duration_match { 30 } else { 0 };
-        Some(title_score + u16::from(artist_match) * 80 + duration_score)
+        let edition_score = u16::from(self.fuzzy && self.edition == edition_flags(title)) * 20;
+        Some(title_score + u16::from(artist_match) * 80 + duration_score + edition_score)
     }
 }
 

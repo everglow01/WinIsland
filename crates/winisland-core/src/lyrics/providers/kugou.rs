@@ -10,8 +10,9 @@ pub(super) async fn fetch(
     title: &str,
     artist: &str,
     duration_secs: u64,
+    fuzzy: bool,
 ) -> Option<Arc<Vec<LyricLine>>> {
-    let query = SongQuery::new(title, artist, duration_secs);
+    let query = SongQuery::new(title, artist, duration_secs, fuzzy);
     for term in query.search_terms() {
         let search_url = format!(
             "https://lyrics.kugou.com/search?ver=1&man=yes&client=pc&keyword={}&duration={}",

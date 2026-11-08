@@ -146,7 +146,12 @@ impl From<&str> for LyricsMode {
 
 const MAX_LOCAL_LRC_FILES: usize = 2048;
 
-fn fetch_lyrics_local(title: &str, artist: &str, local_dir: &str) -> Option<Arc<Vec<LyricLine>>> {
+fn fetch_lyrics_local(
+    title: &str,
+    artist: &str,
+    local_dir: &str,
+    fuzzy: bool,
+) -> Option<Arc<Vec<LyricLine>>> {
     let title_key = MatchKey::new(title);
     if title_key.compact.is_empty() {
         return None;
@@ -157,7 +162,7 @@ fn fetch_lyrics_local(title: &str, artist: &str, local_dir: &str) -> Option<Arc<
         return None;
     }
 
-    let mut candidates = collect_lrc_candidates(local_dir, &title_key, artist, &artist_key);
+    let mut candidates = collect_lrc_candidates(local_dir, &title_key, artist, &artist_key, fuzzy);
     candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
     for (_, path) in candidates {
         if let Some(content) = read_lrc_text(&path) {
@@ -206,6 +211,7 @@ fn collect_lrc_candidates(
     title: &MatchKey,
     artist_name: &str,
     artist: &MatchKey,
+    fuzzy: bool,
 ) -> Vec<(u16, PathBuf)> {
     let Ok(entries) = fs::read_dir(local_dir) else {
         return Vec::new();
@@ -225,13 +231,14 @@ fn collect_lrc_candidates(
             }
             let stem = path.file_stem()?.to_str()?;
             let stem_key = MatchKey::new(stem);
-            let filename_score = score_lrc_match(&stem_key, title, artist);
+            let filename_score = score_lrc_match(&stem_key, title, artist, fuzzy);
             let (metadata_score, metadata_artist_match) = read_lrc_text_prefix(&path)
-                .map(|content| score_lrc_metadata(&content, title, artist))
+                .map(|content| score_lrc_metadata(&content, title, artist, fuzzy))
                 .unwrap_or(Some((0, false)))?;
             // A title alone cannot tell apart different songs that share it, so a filename that
             // carries more than the title must name the player's artist.
-            if !artist.compact.is_empty()
+            if !fuzzy
+                && !artist.compact.is_empty()
                 && !metadata_artist_match
                 && !stem_fits_artist(stem, &stem_key, title, artist_name, artist)
             {
@@ -243,14 +250,14 @@ fn collect_lrc_candidates(
         .collect()
 }
 
-fn score_lrc_match(candidate: &MatchKey, title: &MatchKey, artist: &MatchKey) -> u16 {
+fn score_lrc_match(candidate: &MatchKey, title: &MatchKey, artist: &MatchKey, fuzzy: bool) -> u16 {
     if candidate.matches(title) {
         return 110;
     }
     if joins_title_and_artist(candidate, title, artist) {
         return 120;
     }
-    if let Some(score) = fuzzy_title_score(candidate, title, artist) {
+    if let Some(score) = fuzzy_title_score(candidate, title, artist, fuzzy) {
         return score;
     }
     if title.simplified_compact.chars().count() < 3 {
@@ -334,7 +341,12 @@ fn stem_fits_artist(
         })
 }
 
-fn fuzzy_title_score(candidate: &MatchKey, title: &MatchKey, artist: &MatchKey) -> Option<u16> {
+fn fuzzy_title_score(
+    candidate: &MatchKey,
+    title: &MatchKey,
+    artist: &MatchKey,
+    relaxed: bool,
+) -> Option<u16> {
     let options = PreprocessingOptions {
         force_ascii: false,
         strip: true,
@@ -345,6 +357,8 @@ fn fuzzy_title_score(candidate: &MatchKey, title: &MatchKey, artist: &MatchKey) 
         queries.push(&title_without_artist);
     }
 
+    let mut relaxed_match = false;
+    let candidate_len = candidate.simplified_compact.chars().count();
     for query in queries {
         let query_len = query.chars().count();
         let score = partial_ratio(query, &candidate.simplified_compact, &options);
@@ -354,6 +368,7 @@ fn fuzzy_title_score(candidate: &MatchKey, title: &MatchKey, artist: &MatchKey) 
         if query_len >= 4 && score >= 0.98 {
             return Some(90);
         }
+        relaxed_match |= relaxed && query_len.min(candidate_len) >= 3 && score >= 0.80;
     }
 
     let common_len =
@@ -375,7 +390,7 @@ fn fuzzy_title_score(candidate: &MatchKey, title: &MatchKey, artist: &MatchKey) 
     {
         return Some(90);
     }
-    None
+    relaxed_match.then_some(80)
 }
 
 fn remove_component(value: &str, component: &MatchKey) -> String {
@@ -419,7 +434,12 @@ fn shared_token_signal(left: &str, right: &str) -> (usize, usize) {
 }
 
 /// The flag is whether `[ar:]` names the player's artist; callers must not infer it from the score.
-fn score_lrc_metadata(content: &str, title: &MatchKey, artist: &MatchKey) -> Option<(u16, bool)> {
+fn score_lrc_metadata(
+    content: &str,
+    title: &MatchKey,
+    artist: &MatchKey,
+    fuzzy: bool,
+) -> Option<(u16, bool)> {
     let mut metadata_title = None;
     let mut metadata_artist = None;
     for line in content.lines().take(80) {
@@ -430,23 +450,28 @@ fn score_lrc_metadata(content: &str, title: &MatchKey, artist: &MatchKey) -> Opt
             metadata_artist = Some(MatchKey::new(value));
         }
     }
-    if metadata_title
-        .as_ref()
-        .is_some_and(|metadata| !metadata.matches(title))
-        || (!artist.compact.is_empty()
-            && metadata_artist
-                .as_ref()
-                .is_some_and(|metadata| !metadata.matches(artist)))
+    if !fuzzy
+        && !artist.compact.is_empty()
+        && metadata_artist
+            .as_ref()
+            .is_some_and(|metadata| !metadata.matches(artist))
     {
         return None;
     }
     let artist_match = metadata_artist
         .as_ref()
         .is_some_and(|metadata| metadata.matches(artist));
-    if metadata_title.is_none() {
+    let Some(metadata_title) = metadata_title else {
         return Some((0, artist_match));
+    };
+    if metadata_title.matches(title) {
+        return Some((if artist_match { 140 } else { 115 }, artist_match));
     }
-    Some((if artist_match { 140 } else { 115 }, artist_match))
+    if !fuzzy {
+        return None;
+    }
+    let score = score_lrc_match(&metadata_title, title, artist, true);
+    (score > 0).then_some((score + u16::from(artist_match) * 20, artist_match))
 }
 
 fn split_artists(value: &str) -> Vec<MatchKey> {
@@ -557,11 +582,12 @@ pub fn load_local_lyrics(
     title: &str,
     artist: &str,
     local_dir: &str,
+    fuzzy: bool,
 ) -> Option<Arc<Vec<LyricLine>>> {
     if title.is_empty() {
         return None;
     }
-    fetch_lyrics_local(title, artist, local_dir).map(simplify_lyrics_for_chinese_ui)
+    fetch_lyrics_local(title, artist, local_dir, fuzzy).map(simplify_lyrics_for_chinese_ui)
 }
 
 pub async fn fetch_online_lyrics(
@@ -569,13 +595,14 @@ pub async fn fetch_online_lyrics(
     artist: &str,
     duration_secs: u64,
     source: &str,
+    fuzzy: bool,
 ) -> Option<Arc<Vec<LyricLine>>> {
     if title.is_empty() {
         return None;
     }
 
     log::info!("Lyrics: fetching '{title}' - '{artist}' from source '{source}'");
-    if let Some(lyrics) = providers::fetch(source, title, artist, duration_secs).await {
+    if let Some(lyrics) = providers::fetch(source, title, artist, duration_secs, fuzzy).await {
         let word_synced = lyrics.iter().filter(|line| line.is_word_synced()).count();
         log::info!(
             "Lyrics: source '{source}' succeeded ({} lines, {word_synced} word-synced)",
@@ -589,7 +616,8 @@ pub async fn fetch_online_lyrics(
     );
     for fallback_source in providers::fallback_sources(source) {
         log::info!("Lyrics: trying fallback source '{fallback_source}'");
-        if let Some(lyrics) = providers::fetch(fallback_source, title, artist, duration_secs).await
+        if let Some(lyrics) =
+            providers::fetch(fallback_source, title, artist, duration_secs, fuzzy).await
         {
             let word_synced = lyrics.iter().filter(|line| line.is_word_synced()).count();
             log::warn!(

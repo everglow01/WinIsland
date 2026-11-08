@@ -12,8 +12,8 @@ use crate::lyrics::{LyricLine, LyricTiming};
 
 const API_BASE: &str = "https://api.amll.dev/v1/lyrics";
 
-pub(super) async fn fetch(title: &str, artist: &str) -> Option<Arc<Vec<LyricLine>>> {
-    let query = SongQuery::new(title, artist, 0);
+pub(super) async fn fetch(title: &str, artist: &str, fuzzy: bool) -> Option<Arc<Vec<LyricLine>>> {
+    let query = SongQuery::new(title, artist, 0, fuzzy);
     for term in query.title_search_terms() {
         if let Some(lyrics) = fetch_inner(&query, &term).await {
             return Some(lyrics);

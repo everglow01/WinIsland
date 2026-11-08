@@ -9,8 +9,9 @@ pub(super) async fn fetch(
     title: &str,
     artist: &str,
     duration_secs: u64,
+    fuzzy: bool,
 ) -> Option<Arc<Vec<LyricLine>>> {
-    let query = SongQuery::new(title, artist, duration_secs);
+    let query = SongQuery::new(title, artist, duration_secs, fuzzy);
     if duration_secs > 0
         && !artist.trim().is_empty()
         && let Some(lyrics) = fetch_exact(&query, title, artist, duration_secs).await
