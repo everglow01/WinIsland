@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+harfrust = "0.15"
 image = "0.25"
 log = { version = "0.4", features = ["std"] }
 skia-safe = { version = "0.99.0", features = ["d3d"] }

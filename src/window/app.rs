@@ -439,8 +439,10 @@ impl SeekDrag {
 
 struct LyricState {
     current_text: String,
+    current_font_family: Option<String>,
     current_secondary_text: String,
     old_text: String,
+    old_font_family: Option<String>,
     old_secondary_text: String,
     highlight: Option<LyricHighlight>,
     transition: f32,
@@ -460,8 +462,10 @@ impl Default for LyricState {
                 .max(1);
         Self {
             current_text: String::new(),
+            current_font_family: None,
             current_secondary_text: String::new(),
             old_text: String::new(),
+            old_font_family: None,
             old_secondary_text: String::new(),
             highlight: None,
             transition: 1.0,
@@ -478,11 +482,13 @@ impl LyricState {
         &mut self,
         text: String,
         secondary_text: String,
+        font_family: Option<String>,
         highlight: Option<LyricHighlight>,
         show_immediately: bool,
         transition_mode: LyricTransitionMode,
     ) {
         self.old_text = std::mem::replace(&mut self.current_text, text);
+        self.old_font_family = std::mem::replace(&mut self.current_font_family, font_family);
         self.old_secondary_text =
             std::mem::replace(&mut self.current_secondary_text, secondary_text);
         self.highlight = highlight;

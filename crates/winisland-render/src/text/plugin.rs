@@ -53,7 +53,7 @@ fn slanted(italic: bool) -> skia_safe::font_style::Slant {
     }
 }
 
-impl FontManager {
+impl FontManager<'_> {
     fn plugin_typeface(&self, style: SkFontStyle, family: &str) -> Option<Typeface> {
         if family.is_empty()
             && let Some(typeface) = user_typeface()

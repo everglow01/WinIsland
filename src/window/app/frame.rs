@@ -978,6 +978,7 @@ impl App {
                     (
                         lyric.text.to_owned(),
                         lyric.secondary_text.unwrap_or_default().to_owned(),
+                        lyric.font_family.map(str::to_owned),
                         lyric.highlight,
                         lyric.started,
                     )
@@ -985,13 +986,15 @@ impl App {
         } else {
             None
         };
-        if let Some((lyric, secondary_lyric, highlight, started)) = current_lyric {
+        if let Some((lyric, secondary_lyric, font_family, highlight, started)) = current_lyric {
             if lyric != self.lyrics.current_text
                 || secondary_lyric != self.lyrics.current_secondary_text
+                || font_family != self.lyrics.current_font_family
             {
                 self.lyrics.transition_to(
                     lyric,
                     secondary_lyric,
+                    font_family,
                     highlight,
                     started,
                     self.config.lyrics_transition_animation,
@@ -1005,6 +1008,7 @@ impl App {
             self.lyrics.transition_to(
                 String::new(),
                 String::new(),
+                None,
                 None,
                 false,
                 self.config.lyrics_transition_animation,
@@ -1020,6 +1024,7 @@ impl App {
         }
         if self.lyrics.transition >= 1.0 && !self.lyrics.old_text.is_empty() {
             self.lyrics.old_text = String::new();
+            self.lyrics.old_font_family = None;
             self.lyrics.old_secondary_text = String::new();
         }
     }

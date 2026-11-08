@@ -538,8 +538,13 @@ impl App {
                                         },
                                         lyrics: crate::ui::island::LyricsParams {
                                             current_lyric: &self.lyrics.current_text,
+                                            current_font_family: self
+                                                .lyrics
+                                                .current_font_family
+                                                .as_deref(),
                                             current_secondary_lyric,
                                             old_lyric: &self.lyrics.old_text,
+                                            old_font_family: self.lyrics.old_font_family.as_deref(),
                                             old_secondary_lyric,
                                             lyric_highlight: self.lyrics.highlight,
                                             lyric_transition: self.lyrics.transition,

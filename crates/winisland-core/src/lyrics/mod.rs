@@ -15,6 +15,7 @@ pub struct LyricLine {
     pub time_ms: u64,
     pub text: String,
     pub secondary_text: Option<String>,
+    pub font_family: Option<String>,
     timings: Vec<LyricTiming>,
 }
 
@@ -675,6 +676,7 @@ fn parse_lyrics(lrc: &str, tlrc: &str) -> Vec<LyricLine> {
                     time_ms: timestamp as u64,
                     text: text.to_string(),
                     secondary_text: None,
+                    font_family: None,
                     timings: Vec::new(),
                 },
             );
@@ -775,6 +777,7 @@ fn parse_word_synced_line(line: &str) -> Option<LyricLine> {
         time_ms: timings.first()?.start_time_ms,
         text,
         secondary_text: None,
+        font_family: None,
         timings,
     })
 }

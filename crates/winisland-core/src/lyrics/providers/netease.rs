@@ -152,6 +152,7 @@ fn parse_yrc_line(line: &str) -> Option<LyricLine> {
         time_ms,
         text,
         secondary_text: None,
+        font_family: None,
         timings,
     })
 }

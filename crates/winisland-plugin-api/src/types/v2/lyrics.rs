@@ -10,6 +10,13 @@ pub const LYRICS_TEXT_FLAG_WORD_SYNCED: u32 = 1 << 0;
 /// of replacing the line. An empty output leaves the line without secondary text.
 pub const LYRICS_TRANSFORMER_FLAG_SECONDARY: u32 = 1 << 0;
 
+/// The output selects the original line's font family without changing its text or timings.
+/// Return an empty string to keep the current selection. Cannot be combined with SECONDARY.
+pub const LYRICS_TRANSFORMER_FLAG_FONT_FAMILY: u32 = 1 << 1;
+
+/// Maximum UTF-8 length of a selected font family. Embedded NUL bytes are invalid.
+pub const LYRICS_FONT_FAMILY_MAX_BYTES: u32 = 256;
+
 /// A parsed lyric line supplied to a registered transformer.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -69,7 +76,7 @@ pub type LyricsTransformFnV2 = unsafe extern "C" fn(
 pub struct LyricsTransformerDataV2 {
     /// Must be `size_of::<LyricsTransformerDataV2>()`.
     pub struct_size: u32,
-    /// Zero or `LYRICS_TRANSFORMER_FLAG_SECONDARY`.
+    /// Zero, `LYRICS_TRANSFORMER_FLAG_SECONDARY`, or `LYRICS_TRANSFORMER_FLAG_FONT_FAMILY`.
     pub flags: u32,
     pub on_transform: Option<LyricsTransformFnV2>,
     /// Opaque pointer passed back to `on_transform`.

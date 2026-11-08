@@ -331,7 +331,7 @@ pub(super) fn draw_stepper(params: StepperParams<'_>) {
 }
 
 pub(crate) fn ellipsize_text(
-    fm: &FontManager,
+    fm: &FontManager<'_>,
     text: &str,
     size: f32,
     style: impl Into<FontStyle>,

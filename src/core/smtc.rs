@@ -143,6 +143,7 @@ impl MediaInfo {
         let line = &lyrics[index];
         Some(CurrentLyric {
             text: &line.text,
+            font_family: line.font_family.as_deref(),
             secondary_text: line
                 .secondary_text
                 .as_deref()
@@ -156,6 +157,7 @@ impl MediaInfo {
 
 pub(crate) struct CurrentLyric<'a> {
     pub(crate) text: &'a str,
+    pub(crate) font_family: Option<&'a str>,
     pub(crate) secondary_text: Option<&'a str>,
     pub(crate) started: bool,
     pub(crate) highlight: Option<LyricHighlight>,

@@ -11,7 +11,8 @@ use crate::abi::{
 use crate::types::v2::context::{ContextDataV2, HostStateV2, MediaSourceDataV2};
 use crate::types::v2::i18n::TranslationPairV2;
 use crate::types::v2::lyrics::{
-    LYRICS_TRANSFORMER_FLAG_SECONDARY, LyricsTextV2, LyricsTransformerDataV2,
+    LYRICS_TRANSFORMER_FLAG_FONT_FAMILY, LYRICS_TRANSFORMER_FLAG_SECONDARY, LyricsTextV2,
+    LyricsTransformerDataV2,
 };
 use crate::types::v2::settings::{SETTINGS_ITEM_SECTION, SettingsItemV2, SettingsPageDataV2};
 use crate::types::v2::{ByteSlice, ImageId, ResourceId, TextMetricsV2, TextStyleV2, Utf8Slice};
@@ -25,9 +26,9 @@ enum ResourceKind {
 }
 
 type Transform = dyn Fn(&str) -> String + Send + Sync;
-type SecondaryTransform = dyn Fn(&LyricsLine<'_>) -> String + Send + Sync;
+type LineTransform = dyn Fn(&LyricsLine<'_>) -> String + Send + Sync;
 
-/// One lyric line passed to a secondary-text transformer, with the whole song for context.
+/// One lyric line passed to a contextual transformer, with the whole song for context.
 pub struct LyricsLine<'a> {
     pub text: &'a str,
     pub time_ms: u64,
@@ -214,7 +215,7 @@ unsafe extern "C" fn transform_line(
     unsafe { write_output(&value, output, capacity, out_len) }
 }
 
-unsafe extern "C" fn transform_secondary(
+unsafe extern "C" fn transform_context(
     callback_data: *mut c_void,
     _resource_id: ResourceId,
     input: *const LyricsTextV2,
@@ -246,7 +247,7 @@ unsafe extern "C" fn transform_secondary(
         song,
     };
     // SAFETY: The callback pointer is the stable inner Box retained by Resource.
-    let callback = unsafe { &*(callback_data as *const Box<SecondaryTransform>) };
+    let callback = unsafe { &*(callback_data as *const Box<LineTransform>) };
     let Ok(value) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback(&line)))
     else {
         return PluginStatus::Internal;
@@ -306,11 +307,29 @@ impl LyricsApi {
     where
         F: Fn(&LyricsLine<'_>) -> String + Send + Sync + 'static,
     {
-        let mut callback: Box<Box<SecondaryTransform>> = Box::new(Box::new(transform));
+        self.register_context(LYRICS_TRANSFORMER_FLAG_SECONDARY, transform)
+    }
+
+    /// Selects a font for each original lyric line after text transformations finish.
+    /// `None` preserves the existing selection; the host copies each returned family name.
+    pub fn register_font_family<F>(&self, select: F) -> Result<Resource, Error>
+    where
+        F: Fn(&LyricsLine<'_>) -> Option<String> + Send + Sync + 'static,
+    {
+        self.register_context(LYRICS_TRANSFORMER_FLAG_FONT_FAMILY, move |line| {
+            select(line).unwrap_or_default()
+        })
+    }
+
+    fn register_context<F>(&self, flags: u32, transform: F) -> Result<Resource, Error>
+    where
+        F: Fn(&LyricsLine<'_>) -> String + Send + Sync + 'static,
+    {
+        let mut callback: Box<Box<LineTransform>> = Box::new(Box::new(transform));
         let data = LyricsTransformerDataV2 {
-            flags: LYRICS_TRANSFORMER_FLAG_SECONDARY,
-            on_transform: Some(transform_secondary),
-            callback_data: (&mut *callback as *mut Box<SecondaryTransform>).cast(),
+            flags,
+            on_transform: Some(transform_context),
+            callback_data: (&mut *callback as *mut Box<LineTransform>).cast(),
             ..Default::default()
         };
         self.register_data(&data, callback)

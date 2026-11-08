@@ -202,6 +202,7 @@ impl LineBuilder {
             time_ms: self.time_ms,
             text: self.text,
             secondary_text,
+            font_family: None,
             timings: self.timings,
         })
     }

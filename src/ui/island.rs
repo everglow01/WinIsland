@@ -64,8 +64,10 @@ pub struct MediaParams<'a> {
 
 pub struct LyricsParams<'a> {
     pub current_lyric: &'a str,
+    pub current_font_family: Option<&'a str>,
     pub current_secondary_lyric: &'a str,
     pub old_lyric: &'a str,
+    pub old_font_family: Option<&'a str>,
     pub old_secondary_lyric: &'a str,
     pub lyric_highlight: Option<LyricHighlight>,
     pub lyric_transition: f32,
@@ -462,8 +464,10 @@ fn draw_compact_layer(
         spectrum_fill,
         viz_h_scale: visualizer_height_scale,
         current_lyric: lyrics.current_lyric,
+        current_font_family: lyrics.current_font_family,
         current_secondary_lyric: lyrics.current_secondary_lyric,
         old_lyric: lyrics.old_lyric,
+        old_font_family: lyrics.old_font_family,
         old_secondary_lyric: lyrics.old_secondary_lyric,
         lyric_highlight: lyrics.lyric_highlight,
         expansion_progress: layout.expansion_progress,

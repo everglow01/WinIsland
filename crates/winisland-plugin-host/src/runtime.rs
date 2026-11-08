@@ -37,10 +37,17 @@ pub struct HostRuntime {
     _pin: PhantomPinned,
 }
 
-/// Each lyric transformer's owner and whether it writes secondary text, kept outside the service
+/// Each lyric transformer's owner and output kind, kept outside the service
 /// state so the lyrics bridge can skip plugins without a transformer of the requested kind
 /// instead of queueing behind their other work.
-pub(crate) type LyricsKinds = Arc<Mutex<HashMap<u64, (PluginToken, bool)>>>;
+pub(crate) type LyricsKinds = Arc<Mutex<HashMap<u64, (PluginToken, LyricsKind)>>>;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LyricsKind {
+    Text,
+    Secondary,
+    FontFamily,
+}
 
 #[derive(Clone, Copy)]
 pub struct SystemServices {
@@ -137,7 +144,7 @@ pub(crate) struct TranslationBundle {
 pub struct LyricsRecord {
     pub on_transform: LyricsTransformFnV2,
     pub callback_data: usize,
-    pub secondary: bool,
+    pub kind: LyricsKind,
     pub in_flight: u32,
 }
 

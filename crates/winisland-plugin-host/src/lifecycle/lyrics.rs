@@ -6,12 +6,14 @@ use std::time::{Duration, Instant};
 
 use winisland_core::lyrics::LyricLine;
 use winisland_plugin_api::abi::PluginStatus;
-use winisland_plugin_api::types::v2::lyrics::{LYRICS_TEXT_FLAG_WORD_SYNCED, LyricsTextV2};
+use winisland_plugin_api::types::v2::lyrics::{
+    LYRICS_FONT_FAMILY_MAX_BYTES, LYRICS_TEXT_FLAG_WORD_SYNCED, LyricsTextV2,
+};
 use winisland_plugin_api::types::v2::{PluginToken, ResourceId, Utf8Slice};
 
 use super::{PluginCallGuard, PluginIdentity, PluginInstance, WorkerEvent};
 use crate::resources::ResourceKind;
-use crate::runtime::{HostRuntime, LyricsKinds};
+use crate::runtime::{HostRuntime, LyricsKind, LyricsKinds};
 
 const PRIMARY_TIMEOUT: Duration = Duration::from_secs(2);
 /// Secondary transformers run after the original lyrics are shown, and one may process the whole
@@ -44,7 +46,7 @@ struct WorkerLoad {
 }
 
 pub(super) struct TransformRequest {
-    pub(super) secondary: bool,
+    pub(super) kind: LyricsKind,
     pub(super) time_ms: u64,
     pub(super) word_synced: bool,
     pub(super) text: String,
@@ -174,7 +176,8 @@ impl LyricsBridge {
     /// would wait behind its other work and time out. Primary runs also skip a busy plugin so
     /// they never hold back the lyrics; secondary runs queue behind it, because the earlier call
     /// is usually the previous song's, whose remaining requests the plugin skips.
-    fn active_workers(&self, secondary: bool) -> Vec<(LyricsWorker, bool)> {
+    fn active_workers(&self, kind: LyricsKind) -> Vec<(LyricsWorker, bool)> {
+        let secondary = kind == LyricsKind::Secondary;
         let Ok(kinds) = self.kinds.lock() else {
             return Vec::new();
         };
@@ -186,7 +189,7 @@ impl LyricsBridge {
                     .filter(|worker| {
                         kinds
                             .values()
-                            .any(|&(token, kind)| token == worker.token && kind == secondary)
+                            .any(|&(token, registered)| token == worker.token && registered == kind)
                             && !worker.stalled()
                             && (secondary || !worker.busy())
                     })
@@ -199,11 +202,13 @@ impl LyricsBridge {
 
     /// Whether a plugin that is not stalled has a transformer that writes secondary text.
     pub fn has_secondary(&self) -> bool {
-        !self.active_workers(true).is_empty()
+        !self.active_workers(LyricsKind::Secondary).is_empty()
     }
 
     pub fn apply(&self, lyrics: Arc<Vec<LyricLine>>) -> Arc<Vec<LyricLine>> {
-        self.run(lyrics, false, &Arc::default(), |_| {})
+        let cancelled = Arc::default();
+        let lyrics = self.run(lyrics, LyricsKind::Text, &cancelled, |_| {});
+        self.run(lyrics, LyricsKind::FontFamily, &cancelled, |_| {})
     }
 
     /// `progress` receives partial results at most once per [`PROGRESS_INTERVAL`]. Once
@@ -214,17 +219,18 @@ impl LyricsBridge {
         cancelled: &Arc<AtomicBool>,
         progress: impl FnMut(&Arc<Vec<LyricLine>>),
     ) -> Arc<Vec<LyricLine>> {
-        self.run(lyrics, true, cancelled, progress)
+        self.run(lyrics, LyricsKind::Secondary, cancelled, progress)
     }
 
     fn run(
         &self,
         mut lyrics: Arc<Vec<LyricLine>>,
-        secondary: bool,
+        kind: LyricsKind,
         cancelled: &Arc<AtomicBool>,
         mut progress: impl FnMut(&Arc<Vec<LyricLine>>),
     ) -> Arc<Vec<LyricLine>> {
-        let mut workers = self.active_workers(secondary);
+        let secondary = kind == LyricsKind::Secondary;
+        let mut workers = self.active_workers(kind);
         if workers.is_empty() {
             return lyrics;
         }
@@ -255,7 +261,7 @@ impl LyricsBridge {
                     continue;
                 }
                 let request = TransformRequest {
-                    secondary,
+                    kind,
                     time_ms: line.time_ms,
                     word_synced: line.is_word_synced(),
                     text: line.text.clone(),
@@ -271,6 +277,11 @@ impl LyricsBridge {
                             line.secondary_text = Some(text);
                             unpublished = true;
                             break;
+                        }
+                    }
+                    Ok(family) if kind == LyricsKind::FontFamily => {
+                        if !family.trim().is_empty() {
+                            line.font_family = Some(family);
                         }
                     }
                     Ok(text) => {
@@ -322,21 +333,25 @@ pub(super) fn dispatch_transform(
     let _call = request.start_call();
     let mut ids = runtime.resources.list(token, ResourceKind::Lyrics)?;
     ids.sort_unstable();
-    let mut text = request.text.clone();
+    let mut text = if request.kind == LyricsKind::Text {
+        request.text.clone()
+    } else {
+        String::new()
+    };
     for id in ids {
         let (callback, callback_data) = {
             let mut state = runtime.state.lock().map_err(|_| PluginStatus::Internal)?;
             let record = state.lyrics.get_mut(&id).ok_or(PluginStatus::StaleHandle)?;
-            if record.secondary != request.secondary {
+            if record.kind != request.kind {
                 continue;
             }
             record.in_flight = record.in_flight.saturating_add(1);
             (record.on_transform, record.callback_data)
         };
-        let input = if request.secondary {
-            &request.text
-        } else {
+        let input = if request.kind == LyricsKind::Text {
             &text
+        } else {
+            &request.text
         };
         let result = transform_one(identity, callback, callback_data, id, request, input);
         if let Ok(mut state) = runtime.state.lock()
@@ -345,17 +360,14 @@ pub(super) fn dispatch_transform(
             record.in_flight = record.in_flight.saturating_sub(1);
         }
         let output = result?;
-        if !request.secondary {
-            text = output;
-        } else if !output.trim().is_empty() {
-            return Ok(output);
+        match request.kind {
+            LyricsKind::Text => text = output,
+            LyricsKind::Secondary if !output.trim().is_empty() => return Ok(output),
+            LyricsKind::FontFamily if !output.trim().is_empty() => text = output,
+            LyricsKind::Secondary | LyricsKind::FontFamily => {}
         }
     }
-    if request.secondary {
-        Ok(String::new())
-    } else {
-        Ok(text)
-    }
+    Ok(text)
 }
 
 fn transform_one(
@@ -396,7 +408,12 @@ fn transform_one(
     if status != PluginStatus::Ok {
         return Err(status);
     }
-    if required > 256 * 1024 {
+    let max_bytes = if request.kind == LyricsKind::FontFamily {
+        LYRICS_FONT_FAMILY_MAX_BYTES
+    } else {
+        256 * 1024
+    };
+    if required > max_bytes {
         return Err(PluginStatus::LimitExceeded);
     }
     if required == 0 {
@@ -422,5 +439,9 @@ fn transform_one(
         return Err(PluginStatus::InvalidArgument);
     }
     output.truncate(written as usize);
-    String::from_utf8(output).map_err(|_| PluginStatus::InvalidArgument)
+    let text = String::from_utf8(output).map_err(|_| PluginStatus::InvalidArgument)?;
+    if request.kind == LyricsKind::FontFamily && text.contains('\0') {
+        return Err(PluginStatus::InvalidArgument);
+    }
+    Ok(text)
 }
