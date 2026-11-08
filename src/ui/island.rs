@@ -586,6 +586,8 @@ fn draw_liquid_island(
         .style
         .liquid_optics
         .apply(LiquidMaterial::island(scale));
+    // The shadow reaches below the island, past the gap an auto-hidden island keeps to the screen edge.
+    material.shadow_alpha *= (1.0 - layout.hide_progress).clamp(0.0, 1.0);
     if params.style.liquid_siri {
         material.black_fade = 1.0;
     }
@@ -734,6 +736,7 @@ fn apply_lingosoul_drop(material: &mut LiquidMaterial, lingosoul: &LingoSoulStyl
     );
     material.specular_opacity *= 1.0 - t;
     material.stroke_opacity *= 1.0 - t;
+    material.border_opacity *= 1.0 - t;
     material.shadow_offset = Vec2::new(0.0, lerp(material.shadow_offset.y, 20.0 * scale, t));
     material.shadow_radius = lerp(material.shadow_radius, 28.0 * scale, t);
     material.shadow_alpha = lerp(material.shadow_alpha, 0.24, t);

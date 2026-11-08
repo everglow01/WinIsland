@@ -58,10 +58,15 @@ pub struct LiquidMaterial {
     pub stroke_width: f32,
     pub stroke_opacity: f32,
     pub stroke_offset_y: f32,
+    pub border_width: f32,
+    pub border_opacity: f32,
+    pub border_gray: f32,
     pub shadow_offset: Vec2,
     pub shadow_radius: f32,
     pub shadow_spread: f32,
     pub shadow_alpha: f32,
+    /// 1 draws the shadow as a soft ring along the edge, 0 as a filled drop.
+    pub shadow_ring: f32,
     pub black_fade: f32,
     pub lingosoul: [f32; 4],
     pub lingosoul_wave: [f32; 4],
@@ -78,20 +83,25 @@ impl LiquidMaterial {
             morph_dispersion: 0.06,
             tint: Rgba::from_argb(95, 10, 11, 15),
             legibility: 0.32,
-            light: Vec2::new(-FRAC_1_SQRT_2, -FRAC_1_SQRT_2),
-            specular_strength: 0.75,
-            opposite_specular_strength: 0.38,
-            specular_sharpness: 3.0,
+            light: Vec2::new(0.0, -1.0),
+            specular_strength: 0.55,
+            opposite_specular_strength: 0.3,
+            specular_sharpness: 1.5,
             specular_falloff: 0.9,
-            specular_opacity: 0.8,
-            specular_width: 1.5 * scale,
+            specular_opacity: 0.6,
+            specular_width: 0.9 * scale,
             stroke_width: 0.65 * scale,
             stroke_opacity: 0.25,
             stroke_offset_y: 0.2 * scale,
-            shadow_offset: Vec2::new(0.0, 2.0 * scale),
-            shadow_radius: 7.0 * scale,
-            shadow_spread: -scale,
-            shadow_alpha: 0.22,
+            // Device pixels, not scaled: a hairline at every DPI.
+            border_width: 0.5,
+            border_opacity: 0.5,
+            border_gray: 0.0,
+            shadow_offset: Vec2::new(0.0, 7.0 * scale),
+            shadow_radius: 4.0 * scale,
+            shadow_spread: 0.0,
+            shadow_alpha: 0.05,
+            shadow_ring: 1.0,
             black_fade: 0.0,
             lingosoul: [0.0; 4],
             lingosoul_wave: [0.0; 4],
@@ -120,10 +130,13 @@ impl LiquidMaterial {
         Self {
             bezel_width: 7.0 * scale,
             thickness: 6.0 * scale,
-            specular_width: 1.0 * scale,
+            specular_width: 0.7 * scale,
             stroke_width: 0.5 * scale,
             shadow_radius: 4.0 * scale,
             shadow_offset: Vec2::new(0.0, 1.0 * scale),
+            shadow_spread: -scale,
+            shadow_alpha: 0.22,
+            shadow_ring: 0.0,
             ..Self::island(scale)
         }
     }
@@ -348,6 +361,14 @@ impl<'a> Painter<'a> {
             ],
         );
         uniforms.set(
+            "border",
+            &[
+                material.border_width,
+                material.border_opacity.clamp(0.0, 1.0),
+                material.border_gray.clamp(0.0, 1.0),
+            ],
+        );
+        uniforms.set(
             "shadow",
             &[
                 material.shadow_offset.x,
@@ -357,6 +378,7 @@ impl<'a> Painter<'a> {
             ],
         );
         uniforms.set("shadowAlpha", &[material.shadow_alpha]);
+        uniforms.set("shadowRing", &[material.shadow_ring.clamp(0.0, 1.0)]);
         uniforms.set("opacity", &[opacity]);
         uniforms.set("blackFade", &[material.black_fade.clamp(0.0, 1.0)]);
         uniforms.set("lingosoul", &material.lingosoul);
@@ -384,7 +406,8 @@ impl<'a> Painter<'a> {
                 shape.rect.bottom.max(ball.bottom),
             )
         });
-        let margin = (material.shadow_radius + material.shadow_spread.max(0.0))
+        // The ring shadow is Gaussian; 2.5 radii leaves under 1 % of its peak outside the bounds.
+        let margin = (material.shadow_radius * 2.5 + material.shadow_spread.max(0.0))
             .max(material.stroke_width + material.stroke_offset_y)
             + material
                 .shadow_offset
