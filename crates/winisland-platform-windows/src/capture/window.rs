@@ -10,7 +10,7 @@ use windows::Win32::Foundation::{
 use windows::Win32::Graphics::DirectComposition::{IDCompositionVisual, IDCompositionVisual2};
 use windows::Win32::Graphics::Dwm::{
     DWM_THUMBNAIL_PROPERTIES, DWM_TNP_OPACITY, DWM_TNP_RECTDESTINATION, DWM_TNP_RECTSOURCE,
-    DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE, DWMWA_CLOAKED, DwmGetWindowAttribute,
+    DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE, DWMWA_CLOAKED, DwmFlush, DwmGetWindowAttribute,
 };
 use windows::Win32::Graphics::Gdi::{
     COLOR_DESKTOP, GetMonitorInfoW, GetSysColor, HMONITOR, MONITORINFO,
@@ -34,7 +34,6 @@ use super::wallpaper::Wallpaper;
 use super::{Graphics, intersection, rect_size};
 
 const DWM_TNP_ENABLE3D: u32 = 0x04000000;
-const WINDOW_STACK_INTERVAL: Duration = Duration::from_millis(50);
 
 thread_local! {
     static WALLPAPER_CHANGED: Cell<bool> = const { Cell::new(false) };
@@ -123,9 +122,8 @@ pub(super) struct Scene {
     wallpapers: WallpaperLayers,
     wallpaper: Option<Wallpaper>,
     excluded: Vec<HWND>,
-    windows: Vec<HWND>,
-    pending_windows: Vec<HWND>,
-    stack_checked: Instant,
+    windows: Vec<DesktopWindow>,
+    pending_windows: Vec<DesktopWindow>,
     refresh_error: Option<String>,
     checked: Instant,
     wallpaper_dirty: bool,
@@ -226,7 +224,6 @@ impl Scene {
             excluded,
             windows,
             pending_windows: Vec::new(),
-            stack_checked: Instant::now(),
             refresh_error: None,
             checked: Instant::now(),
             wallpaper_dirty: true,
@@ -294,16 +291,57 @@ impl Scene {
             self.checked = Instant::now();
             self.wallpaper_dirty = false;
         }
-        if self.stack_checked.elapsed() >= WINDOW_STACK_INTERVAL {
-            window_stack(&self.excluded, &mut self.pending_windows)?;
-            if self.windows != self.pending_windows {
-                // DWM tracks live positions. Refresh only membership and stacking, not each move.
-                self.desktop.refresh()?;
-                // SAFETY: Commit the complete window stack together, without resetting capture.
-                unsafe { self.composition.native.Commit()? };
-                std::mem::swap(&mut self.windows, &mut self.pending_windows);
+        window_stack(&self.excluded, &mut self.pending_windows)?;
+        if self.windows != self.pending_windows {
+            self.refresh_desktop()?;
+            std::mem::swap(&mut self.windows, &mut self.pending_windows);
+        }
+        Ok(())
+    }
+
+    fn refresh_desktop(&mut self) -> Result<()> {
+        let replacement = match self.desktop.refresh() {
+            Ok(()) => None,
+            Err(error) if error.code() == E_INVALIDARG => {
+                log::warn!("DWM desktop update was invalidated; recreating the source: {error}");
+                Some(
+                    self.desktop
+                        .recreate(&self.composition.native)
+                        .map_err(|error| {
+                            Error::new(error.code(), format!("Recreate shared desktop: {error}"))
+                        })?,
+                )
             }
-            self.stack_checked = Instant::now();
+            Err(error) => {
+                return Err(Error::new(
+                    error.code(),
+                    format!("Update shared desktop: {error}"),
+                ));
+            }
+        };
+        // SAFETY: All visuals belong to this compositor. Keep the previous source attached
+        // until the new source has been composed, and synchronize geometry before consuming WGC frames.
+        unsafe {
+            if let Some((_, visual)) = &replacement {
+                self.wrapper.AddVisual(visual, true, &self.desktop_visual)?;
+            }
+            self.composition.native.Commit().map_err(|error| {
+                Error::new(error.code(), format!("Commit desktop geometry: {error}"))
+            })?;
+            DwmFlush().map_err(|error| {
+                Error::new(
+                    error.code(),
+                    format!("Synchronize desktop geometry: {error}"),
+                )
+            })?;
+            if let Some((desktop, visual)) = replacement {
+                self.wrapper.RemoveVisual(&self.desktop_visual)?;
+                self.composition.native.Commit()?;
+                self.composition.native.WaitForCommitCompletion()?;
+                self.desktop_visual = visual;
+                self.desktop = desktop;
+                log::info!("Liquid glass desktop source recovered without restarting capture");
+            }
         }
         Ok(())
     }
@@ -641,19 +679,21 @@ fn desktop_children(parent: HWND, shell_process: u32, windows: &mut Vec<DesktopW
     }
 }
 
-fn window_stack(excluded: &[HWND], windows: &mut Vec<HWND>) -> Result<()> {
+fn window_stack(excluded: &[HWND], windows: &mut Vec<DesktopWindow>) -> Result<()> {
     struct Enumeration<'a> {
         excluded: &'a [HWND],
-        windows: &'a mut Vec<HWND>,
+        windows: &'a mut Vec<DesktopWindow>,
     }
     unsafe extern "system" fn collect(hwnd: HWND, parameter: LPARAM) -> BOOL {
         // SAFETY: EnumWindows invokes this synchronously while the enumeration and slice are live.
         let enumeration = unsafe { &mut *(parameter.0 as *mut Enumeration<'_>) };
+        let mut rect = RECT::default();
         // SAFETY: HWND is supplied by EnumWindows; these calls only query window state.
         unsafe {
             if enumeration.excluded.contains(&hwnd)
                 || !IsWindowVisible(hwnd).as_bool()
                 || IsIconic(hwnd).as_bool()
+                || GetWindowRect(hwnd, &mut rect).is_err()
             {
                 return true.into();
             }
@@ -673,7 +713,15 @@ fn window_stack(excluded: &[HWND], windows: &mut Vec<HWND>) -> Result<()> {
         {
             return true.into();
         }
-        enumeration.windows.push(hwnd);
+        enumeration.windows.push(DesktopWindow {
+            hwnd,
+            bounds: Rect {
+                left: rect.left,
+                top: rect.top,
+                right: rect.right,
+                bottom: rect.bottom,
+            },
+        });
         true.into()
     }
     windows.clear();

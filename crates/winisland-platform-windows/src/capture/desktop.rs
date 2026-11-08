@@ -414,13 +414,12 @@ impl Session {
         refresh: bool,
         arrived: bool,
     ) -> Result<bool, String> {
-        let result = self.receive_frame(request, shared, refresh, arrived)?;
         if refresh {
             self.scene
                 .refresh()
                 .map_err(|error| format!("Desktop visual refresh failed: {error}"))?;
         }
-        Ok(result)
+        self.receive_frame(request, shared, refresh, arrived)
     }
 
     fn receive_frame(

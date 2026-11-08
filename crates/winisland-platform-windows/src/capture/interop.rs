@@ -19,6 +19,7 @@ use windows::Win32::System::WinRT::{
     CreateDispatcherQueueController, DQTAT_COM_NONE, DQTYPE_THREAD_CURRENT, DispatcherQueueOptions,
     RO_INIT_SINGLETHREADED, RoInitialize, RoUninitialize,
 };
+use windows::Win32::UI::WindowsAndMessaging::IsWindow;
 use windows::core::{
     BOOL, Error, GUID, HRESULT, IInspectable_Vtbl, IUnknown_Vtbl, Interface, PCSTR, Result, s, w,
 };
@@ -219,6 +220,7 @@ enum DesktopUpdate {
 }
 
 pub(super) struct Desktop {
+    host: HWND,
     thumbnail: Thumbnail,
     update: DesktopUpdate,
     excluded: Vec<HWND>,
@@ -278,6 +280,7 @@ impl Desktop {
         // SAFETY: The export returns one owned IDCompositionVisual2 reference.
         let visual = unsafe { IDCompositionVisual2::from_raw(visual) };
         let build = windows_build()?;
+        log::info!("Liquid glass DWM capture backend: Windows build {build}");
         // SAFETY: The ordinal gained a final flags argument in build 20xxx; select its matching ABI.
         let update = unsafe {
             if build < 20000 {
@@ -293,6 +296,7 @@ impl Desktop {
             }
         };
         let mut desktop = Self {
+            host,
             thumbnail,
             update,
             excluded: excluded.to_vec(),
@@ -304,6 +308,11 @@ impl Desktop {
     }
 
     pub(super) fn refresh(&mut self) -> Result<()> {
+        // Exclusion HWNDs can disappear when the shell or companion windows are recreated.
+        self.excluded.retain(|hwnd| {
+            // SAFETY: IsWindow validates the opaque handle without accessing caller memory.
+            unsafe { IsWindow(Some(*hwnd)).as_bool() }
+        });
         let count = u32::try_from(self.excluded.len())
             .map_err(|_| Error::new(E_INVALIDARG, "Too many excluded windows"))?;
         // SAFETY: The stored function matches this OS's ABI. All arrays and outputs are owned
@@ -333,6 +342,13 @@ impl Desktop {
                 .ok(),
             }
         }
+    }
+
+    pub(super) fn recreate(
+        &self,
+        device: &IDCompositionDesktopDevice,
+    ) -> Result<(Self, IDCompositionVisual2)> {
+        Self::new(self.host, device, &self.excluded, self.source, self.size)
     }
 
     pub(super) fn set_excluded(&mut self, excluded: Vec<HWND>) -> Result<()> {
