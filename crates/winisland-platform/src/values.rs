@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Point {
@@ -220,6 +220,7 @@ pub struct BackdropCaptureRequest {
 pub struct BackdropCaptureFrame {
     pub write_value: u64,
     pub serial: u64,
+    pub captured_at: Option<Instant>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

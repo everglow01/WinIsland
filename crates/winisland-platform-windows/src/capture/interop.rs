@@ -5,7 +5,7 @@ use windows::System::DispatcherQueueController;
 use windows::UI::Composition::Compositor;
 use windows::Win32::Foundation::{E_FAIL, E_INVALIDARG, HWND, NTSTATUS, RECT, SIZE, WAIT_TIMEOUT};
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1CreateFactory, ID2D1Factory1,
+    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1CreateFactory, ID2D1Device, ID2D1Factory1,
 };
 use windows::Win32::Graphics::Direct3D11::ID3D11Device5;
 use windows::Win32::Graphics::DirectComposition::{
@@ -119,6 +119,7 @@ fn shutdown_dispatcher(dispatcher: &DispatcherQueueController) -> Result<()> {
 pub(super) struct Composition {
     pub(super) compositor: Compositor,
     pub(super) native: IDCompositionDesktopDevice,
+    pub(super) drawing: ID2D1Device,
     partner: CompositorPartner,
 }
 
@@ -156,6 +157,7 @@ impl Composition {
             Ok((compositor, native)) => Ok(Self {
                 compositor,
                 native,
+                drawing: d2d,
                 partner,
             }),
             Err(error) => {
@@ -331,6 +333,11 @@ impl Desktop {
                 .ok(),
             }
         }
+    }
+
+    pub(super) fn set_excluded(&mut self, excluded: Vec<HWND>) -> Result<()> {
+        self.excluded = excluded;
+        self.refresh()
     }
 }
 

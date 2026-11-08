@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use parking_lot::Mutex;
 use windows::Foundation::{TimeSpan, TypedEventHandler};
 use windows::Graphics::Capture::{
     Direct3D11CaptureFrame, Direct3D11CaptureFramePool, GraphicsCaptureItem,
@@ -12,6 +13,7 @@ use windows::Graphics::SizeInt32;
 use windows::UI::Composition::Visual;
 use windows::Win32::Graphics::Direct3D11::{D3D11_BOX, D3D11_TEXTURE2D_DESC, ID3D11Texture2D};
 use windows::Win32::Graphics::Dxgi::{Common::DXGI_FORMAT_B8G8R8A8_UNORM, IDXGIDevice};
+use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::System::WinRT::Direct3D11::{
     CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess,
 };
@@ -43,7 +45,11 @@ pub(super) fn run(graphics: Arc<Graphics>, shared: Arc<Shared>, excluded: Vec<is
     let mut retry = INITIAL_RETRY;
     let mut failure: Option<String> = None;
     loop {
-        pump_messages();
+        if pump_messages()
+            && let Some(session) = &mut session
+        {
+            session.scene.settings_changed();
+        }
         let (request, refresh, arrived) = {
             let mut control = shared.control.lock();
             if control.stopped {
@@ -134,6 +140,7 @@ struct Stream {
     frame_token: Option<i64>,
     closed_token: Option<i64>,
     closed: Arc<AtomicBool>,
+    frames: Arc<Mutex<Frames>>,
     rate_hz: u32,
     rate_control: bool,
 }
@@ -143,6 +150,7 @@ impl Stream {
         graphics: &Graphics,
         scene: &Scene,
         size: SizeInt32,
+        rate_hz: u32,
         shared: &Arc<Shared>,
     ) -> windows::core::Result<Self> {
         // Static WinRT caches can outlive the worker apartment. Acquire factories per session.
@@ -191,14 +199,29 @@ impl Stream {
             frame_token: None,
             closed_token: None,
             closed: Arc::new(AtomicBool::new(false)),
+            frames: Arc::new(Mutex::new(Frames {
+                accepting: true,
+                latest: None,
+            })),
             rate_hz: 0,
             rate_control: true,
         };
         let frame_shared = Arc::downgrade(shared);
+        let frames = Arc::clone(&stream.frames);
         stream.frame_token = Some(stream.pool.FrameArrived(&TypedEventHandler::<
             Direct3D11CaptureFramePool,
             windows::core::IInspectable,
-        >::new(move |_, _| {
+        >::new(move |pool, _| {
+            let Some(pool) = pool.as_ref() else {
+                return Ok(());
+            };
+            let mut frames = frames.lock();
+            if !frames.accepting {
+                return Ok(());
+            }
+            // Drain on arrival so a busy consumer never leaves old frames in the WGC pool.
+            frames.receive(pool);
+            drop(frames);
             if let Some(shared) = frame_shared.upgrade() {
                 shared.notify_frame();
             }
@@ -217,6 +240,7 @@ impl Stream {
             Ok(())
         }))?);
         stream.session = Some(stream.pool.CreateCaptureSession(&item)?);
+        stream.set_rate(rate_hz);
         if let Some(session) = &stream.session {
             session.StartCapture()?;
         }
@@ -234,13 +258,20 @@ impl Stream {
                 Duration: FRAME_TICKS_PER_SECOND / i64::from(rate_hz.max(1)),
             })
         {
-            log::debug!("Capture interval control is unavailable; limiting copied frames: {error}");
+            log::debug!(
+                "Capture interval control is unavailable; using compositor timing: {error}"
+            );
             self.rate_control = false;
         }
     }
 
     fn resize(&self, size: (u32, u32)) -> windows::core::Result<()> {
-        self.pool.Recreate(
+        {
+            let mut frames = self.frames.lock();
+            frames.accepting = false;
+            frames.latest = None;
+        }
+        let result = self.pool.Recreate(
             &self.device,
             DirectXPixelFormat::B8G8R8A8UIntNormalized,
             2,
@@ -248,12 +279,23 @@ impl Stream {
                 Width: i32::try_from(size.0).map_err(|_| windows::core::Error::empty())?,
                 Height: i32::try_from(size.1).map_err(|_| windows::core::Error::empty())?,
             },
-        )
+        );
+        let mut frames = self.frames.lock();
+        frames.accepting = result.is_ok();
+        if frames.accepting {
+            frames.receive(&self.pool);
+        }
+        result
     }
 }
 
 impl Drop for Stream {
     fn drop(&mut self) {
+        {
+            let mut frames = self.frames.lock();
+            frames.accepting = false;
+            frames.latest = None;
+        }
         if let Some(token) = self.frame_token.take()
             && let Err(error) = self.pool.RemoveFrameArrived(token)
         {
@@ -275,6 +317,26 @@ impl Drop for Stream {
     }
 }
 
+struct Frames {
+    accepting: bool,
+    latest: Option<Result<Lease, String>>,
+}
+
+impl Frames {
+    fn receive(&mut self, pool: &Direct3D11CaptureFramePool) {
+        for _ in 0..2 {
+            match pool.TryGetNextFrame() {
+                Ok(frame) => self.latest = Some(Ok(Lease(frame))),
+                Err(error) if error.code() == windows::core::Error::empty().code() => break,
+                Err(error) => {
+                    self.latest = Some(Err(format!("Desktop visual frame failed: {error}")));
+                    break;
+                }
+            }
+        }
+    }
+}
+
 struct Session {
     stream: Stream,
     scene: Scene,
@@ -286,7 +348,6 @@ struct Session {
     size: (u32, u32),
     snapshot: ID3D11Texture2D,
     last_frame: Instant,
-    next_frame_ticks: Option<i64>,
     ready: bool,
 }
 
@@ -307,9 +368,8 @@ impl Session {
         };
         let scene = Scene::new(graphics, excluded, bounds, area, request.pixel_scale)
             .map_err(|error| format!("Desktop composition source failed: {error}"))?;
-        let mut stream = Stream::new(graphics, &scene, content_size, shared)
+        let stream = Stream::new(graphics, &scene, content_size, request.rate_hz, shared)
             .map_err(|error| format!("Desktop visual capture failed: {error}"))?;
-        stream.set_rate(request.rate_hz);
         let snapshot = graphics.texture(size.0, size.1)?;
         log::info!(
             "Liquid glass captures a {}x{} desktop region with wallpaper and local window exclusions",
@@ -327,12 +387,27 @@ impl Session {
             size,
             snapshot,
             last_frame: Instant::now(),
-            next_frame_ticks: None,
             ready: false,
         })
     }
 
     fn update(
+        &mut self,
+        request: Request,
+        shared: &Shared,
+        refresh: bool,
+        arrived: bool,
+    ) -> Result<bool, String> {
+        let result = self.receive_frame(request, shared, refresh, arrived)?;
+        if refresh {
+            self.scene
+                .refresh()
+                .map_err(|error| format!("Desktop visual refresh failed: {error}"))?;
+        }
+        Ok(result)
+    }
+
+    fn receive_frame(
         &mut self,
         request: Request,
         shared: &Shared,
@@ -351,9 +426,6 @@ impl Session {
             // SAFETY: The capture device is owned by this session and shared with a protected context.
             unsafe { self.graphics.device.GetDeviceRemovedReason() }
                 .map_err(|error| format!("Desktop capture device was removed: {error}"))?;
-            if self.stream.rate_hz != request.rate_hz {
-                self.next_frame_ticks = None;
-            }
             self.stream.set_rate(request.rate_hz);
         }
         let area = request.area;
@@ -373,40 +445,19 @@ impl Session {
             self.size = size;
             self.ready = false;
             self.last_frame = Instant::now();
-            self.next_frame_ticks = None;
             shared.latest.lock().frame = None;
-        }
-        if refresh {
-            self.scene
-                .refresh()
-                .map_err(|error| format!("Desktop visual refresh failed: {error}"))?;
         }
         // An unchanged desktop can stop producing frames. Only an initial or resized frame is overdue.
         if !self.ready && self.last_frame.elapsed() >= FRAME_TIMEOUT {
             return Err("Desktop visual did not produce an initial frame".into());
         }
-        if !arrived {
+        if !arrived && !refresh {
             return Ok(self.ready);
         }
-        let mut latest_frame = None;
-        for _ in 0..2 {
-            match self.stream.pool.TryGetNextFrame() {
-                Ok(frame) => latest_frame = Some(Lease(frame)),
-                Err(error) if error.code() == windows::core::Error::empty().code() => break,
-                Err(error) => return Err(format!("Desktop visual frame failed: {error}")),
-            }
-        }
-        let Some(frame) = latest_frame else {
+        let Some(frame) = self.stream.frames.lock().latest.take() else {
             return Ok(self.ready);
         };
-        let frame_ticks = frame
-            .0
-            .SystemRelativeTime()
-            .map_err(|error| error.to_string())?
-            .Duration;
-        if self.ready && self.next_frame_ticks.is_some_and(|next| frame_ticks < next) {
-            return Ok(true);
-        }
+        let frame = frame?;
         let access: IDirect3DDxgiInterfaceAccess = frame
             .0
             .Surface()
@@ -438,6 +489,7 @@ impl Session {
             back: 1,
             ..Default::default()
         };
+        let captured_at = frame_time(&frame);
         {
             let mut latest = shared.latest.lock();
             // SAFETY: The checked BGRA region fits both textures on this device. Holding latest
@@ -462,27 +514,36 @@ impl Session {
                 size: self.size,
                 pixel_scale: self.pixel_scale,
                 texture: self.snapshot.clone(),
+                captured_at,
             });
             latest.sequence = latest.sequence.wrapping_add(1);
         }
         self.ready = true;
         self.last_frame = Instant::now();
-        let interval_ticks = FRAME_TICKS_PER_SECOND / i64::from(request.rate_hz);
-        let next = self
-            .next_frame_ticks
-            .unwrap_or(frame_ticks)
-            .saturating_add(interval_ticks);
-        self.next_frame_ticks = Some(if next > frame_ticks {
-            next
-        } else {
-            frame_ticks.saturating_add(interval_ticks)
-        });
         shared.wake();
         Ok(true)
     }
 }
 
 struct Lease(Direct3D11CaptureFrame);
+
+fn frame_time(frame: &Lease) -> Option<Instant> {
+    static FREQUENCY: std::sync::OnceLock<Option<i64>> = std::sync::OnceLock::new();
+    let frequency = (*FREQUENCY.get_or_init(|| {
+        let mut frequency = 0;
+        // SAFETY: The output is writable; the QPC frequency is fixed for the system lifetime.
+        unsafe { QueryPerformanceFrequency(&mut frequency) }.ok()?;
+        (frequency > 0).then_some(frequency)
+    }))?;
+    let ticks = frame.0.SystemRelativeTime().ok()?.Duration;
+    let mut counter = 0;
+    // SAFETY: counter is writable. WGC timestamps and QPC use the same monotonic clock.
+    unsafe { QueryPerformanceCounter(&mut counter) }.ok()?;
+    let now = Instant::now();
+    let current = i128::from(counter) * i128::from(FRAME_TICKS_PER_SECOND) / i128::from(frequency);
+    let age = u64::try_from((current - i128::from(ticks)).max(0)).ok()?;
+    now.checked_sub(Duration::from_nanos(age.checked_mul(100)?))
+}
 
 fn capture_size(bounds: Rect, request: Request) -> Result<(u32, u32), String> {
     rect_size(intersection(bounds, request.area)).ok_or("Capture area is outside the monitor")?;

@@ -1,5 +1,6 @@
 mod desktop;
 mod interop;
+mod wallpaper;
 mod window;
 
 use std::cell::{Cell, RefCell};
@@ -116,6 +117,7 @@ struct Frame {
     size: (u32, u32),
     pixel_scale: u32,
     texture: ID3D11Texture2D,
+    captured_at: Option<std::time::Instant>,
 }
 
 #[derive(Default)]
@@ -171,6 +173,7 @@ pub(crate) struct BackdropCapture {
     copied: Cell<Option<(u64, u64, i32, i32)>>,
     verified: Cell<Rect>,
     write_value: Cell<u64>,
+    captured_at: Cell<Option<std::time::Instant>>,
 }
 
 impl BackdropCapture {
@@ -194,6 +197,7 @@ impl BackdropCapture {
             copied: Cell::new(None),
             verified: Cell::new(Rect::default()),
             write_value: Cell::new(0),
+            captured_at: Cell::new(None),
         })
     }
 
@@ -217,7 +221,7 @@ impl BackdropCapture {
             monitor: monitor.0 as isize,
             area,
             interest: request.interest,
-            rate_hz: request.max_rate_hz.clamp(1, 60),
+            rate_hz: request.max_rate_hz.clamp(1, 120),
             pixel_scale,
         };
         {
@@ -241,6 +245,7 @@ impl BackdropCapture {
                 .map(|_| BackdropCaptureFrame {
                     write_value: self.write_value.get(),
                     serial: self.write_value.get(),
+                    captured_at: self.captured_at.get(),
                 });
         };
         let frame = latest.frame.as_ref().filter(|frame| {
@@ -279,6 +284,7 @@ impl BackdropCapture {
                 Ok(true) => {
                     self.copied.set(Some(key));
                     self.verified.set(interest);
+                    self.captured_at.set(frame.captured_at);
                 }
                 Ok(false)
                     if self.copied.get().is_some_and(|copied| {
@@ -294,6 +300,7 @@ impl BackdropCapture {
         Some(BackdropCaptureFrame {
             write_value: self.write_value.get(),
             serial: self.write_value.get(),
+            captured_at: self.captured_at.get(),
         })
     }
 
@@ -416,6 +423,7 @@ impl BackdropCapture {
                 self.write_value.set(self.write_value.get().max(completed));
                 *self.import.borrow_mut() = Some(import);
                 self.copied.set(None);
+                self.captured_at.set(None);
                 Some(())
             }
             Err(error) => {
