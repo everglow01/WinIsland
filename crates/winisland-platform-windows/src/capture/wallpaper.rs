@@ -65,12 +65,19 @@ struct WallpaperImage {
 
 impl Wallpaper {
     pub(super) fn new(composition: &Composition) -> Result<Self> {
-        let interop: ICompositorInterop = composition.compositor.cast()?;
+        let interop: ICompositorInterop =
+            checked("Query wallpaper compositor", composition.compositor.cast())?;
         // SAFETY: The worker apartment is initialized; all interfaces remain on that worker.
         let (surfaces, service) = unsafe {
             (
-                interop.CreateGraphicsDevice(&composition.drawing)?,
-                CoCreateInstance(&DesktopWallpaper, None, CLSCTX_ALL)?,
+                checked(
+                    "Create wallpaper graphics device",
+                    interop.CreateGraphicsDevice(&composition.drawing),
+                )?,
+                checked(
+                    "Create desktop wallpaper service",
+                    CoCreateInstance(&DesktopWallpaper, None, CLSCTX_ALL),
+                )?,
             )
         };
         let visual = composition.compositor.CreateSpriteVisual()?;
@@ -115,18 +122,24 @@ impl Wallpaper {
         let (width, height) =
             rect_size(area).ok_or_else(|| Error::new(E_INVALIDARG, "Invalid wallpaper area"))?;
         let (width, height) = (width.div_ceil(pixel_scale), height.div_ceil(pixel_scale));
-        let surface = self.surfaces.CreateDrawingSurface(
-            Size {
-                Width: width as f32,
-                Height: height as f32,
-            },
-            DirectXPixelFormat::B8G8R8A8UIntNormalized,
-            DirectXAlphaMode::Premultiplied,
+        let surface = checked(
+            "Create wallpaper drawing surface",
+            self.surfaces.CreateDrawingSurface(
+                Size {
+                    Width: width as f32,
+                    Height: height as f32,
+                },
+                DirectXPixelFormat::B8G8R8A8UIntNormalized,
+                DirectXAlphaMode::Premultiplied,
+            ),
         )?;
-        let drawing: ICompositionDrawingSurfaceInterop = surface.cast()?;
+        let drawing: ICompositionDrawingSurfaceInterop =
+            checked("Query wallpaper drawing surface", surface.cast())?;
         let mut offset = POINT::default();
         // SAFETY: The surface and writable offset are live; EndDraw is called on every path.
-        let context: ID2D1DeviceContext = unsafe { drawing.BeginDraw(None, &mut offset)? };
+        let context: ID2D1DeviceContext = checked("Begin wallpaper drawing", unsafe {
+            drawing.BeginDraw(None, &mut offset)
+        })?;
         // SAFETY: Clip to this surface's atlas allocation before clearing or drawing.
         unsafe {
             context.SetDpi(96.0, 96.0);
@@ -174,12 +187,15 @@ impl Wallpaper {
             context.PopAxisAlignedClip();
             drawing.EndDraw()
         };
-        result.and(end)?;
-        self.visual.SetSize(Vector2 {
-            X: width as f32,
-            Y: height as f32,
-        })?;
-        self.brush.SetSurface(&surface)?;
+        result.and(checked("Finish wallpaper drawing", end))?;
+        checked(
+            "Size wallpaper visual",
+            self.visual.SetSize(Vector2 {
+                X: width as f32,
+                Y: height as f32,
+            }),
+        )?;
+        checked("Attach wallpaper surface", self.brush.SetSurface(&surface))?;
         if self.viewport.is_none() {
             log::info!(
                 "Liquid glass system wallpaper ready ({})",
@@ -201,15 +217,27 @@ impl Settings {
         unsafe {
             let mut id = HSTRING::new();
             let mut desktop = monitor;
-            for index in 0..service.GetMonitorDevicePathCount()? {
-                let candidate = take_string(service.GetMonitorDevicePathAt(index)?);
-                let rect = service.GetMonitorRECT(&candidate)?;
+            for index in 0..checked(
+                "Enumerate wallpaper monitors",
+                service.GetMonitorDevicePathCount(),
+            )? {
+                let Ok(path) = service.GetMonitorDevicePathAt(index) else {
+                    continue;
+                };
+                let candidate = take_string(path);
+                // The wallpaper service also remembers disconnected display paths.
+                let Ok(rect) = service.GetMonitorRECT(&candidate) else {
+                    continue;
+                };
                 let bounds = Rect {
                     left: rect.left,
                     top: rect.top,
                     right: rect.right,
                     bottom: rect.bottom,
                 };
+                if rect_size(bounds).is_none() {
+                    continue;
+                }
                 if bounds == monitor {
                     id = candidate;
                 }
@@ -221,16 +249,22 @@ impl Settings {
             if id.is_empty() {
                 return Err(Error::new(E_FAIL, "Wallpaper monitor is unavailable"));
             }
-            let path = PathBuf::from(take_string(service.GetWallpaper(&id)?).to_os_string());
+            let path = PathBuf::from(
+                take_string(checked(
+                    "Read monitor wallpaper",
+                    service.GetWallpaper(&id),
+                )?)
+                .to_os_string(),
+            );
             let modified = std::fs::metadata(&path)
                 .and_then(|value| value.modified())
                 .ok();
-            let position = service.GetPosition()?;
+            let position = checked("Read wallpaper placement", service.GetPosition())?;
             Ok(Self {
                 path,
                 modified,
                 position,
-                color: service.GetBackgroundColor()?,
+                color: checked("Read wallpaper color", service.GetBackgroundColor())?,
                 bounds: if matches!(position, DWPOS_SPAN | DWPOS_TILE) {
                     desktop
                 } else {
@@ -239,6 +273,10 @@ impl Settings {
             })
         }
     }
+}
+
+fn checked<T>(operation: &str, result: Result<T>) -> Result<T> {
+    result.map_err(|error| Error::new(error.code(), format!("{operation}: {error}")))
 }
 
 impl WallpaperImage {
