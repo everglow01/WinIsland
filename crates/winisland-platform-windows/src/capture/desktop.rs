@@ -423,17 +423,19 @@ impl Session {
         refresh: bool,
         arrived: bool,
     ) -> Result<bool, String> {
-        if refresh
-            && let Some(changed_at) = self
+        if refresh {
+            let changed_at = Instant::now();
+            if self
                 .scene
                 .refresh(request.interest)
                 .map_err(|error| format!("Desktop visual refresh failed: {error}"))?
-        {
-            if self.fresh_after.is_none() {
-                self.last_frame = changed_at;
+            {
+                if self.fresh_after.is_none() {
+                    self.last_frame = changed_at;
+                }
+                self.fresh_after = Some(changed_at);
+                self.next_frame = changed_at;
             }
-            self.fresh_after = Some(changed_at);
-            self.next_frame = changed_at;
         }
         self.receive_frame(request, shared, refresh, arrived)
     }

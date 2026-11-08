@@ -119,7 +119,6 @@ pub(super) struct Scene {
     desktop: Desktop,
     desktop_visual: IDCompositionVisual2,
     desktop_visible: bool,
-    desktop_dirty: bool,
     wrapper: IDCompositionVisual2,
     wallpapers: WallpaperLayers,
     wallpaper: Option<Wallpaper>,
@@ -234,7 +233,6 @@ impl Scene {
             desktop,
             desktop_visual: visual,
             desktop_visible,
-            desktop_dirty: true,
             wrapper,
             wallpapers,
             wallpaper: None,
@@ -295,7 +293,7 @@ impl Scene {
         Ok(())
     }
 
-    pub(super) fn refresh(&mut self, interest: Rect) -> Result<Option<Instant>> {
+    pub(super) fn refresh(&mut self, interest: Rect) -> Result<bool> {
         if self.wallpaper_dirty || self.checked.elapsed() >= Duration::from_secs(1) {
             match self.refresh_wallpaper() {
                 Ok(()) => self.refresh_error = None,
@@ -317,19 +315,12 @@ impl Scene {
             &mut self.pending_windows,
             &mut self.pending_hidden,
         )?;
-        let visibility_changed = self.desktop_dirty
-            || self
-                .windows
-                .iter()
-                .map(|window| window.hwnd)
-                .ne(self.pending_windows.iter().map(|window| window.hwnd));
-        let mut changed_at = None;
-        if self.desktop_dirty || self.windows != self.pending_windows {
-            if self.desktop_dirty {
-                // SAFETY: Capture has started; publish the host's visual tree before refreshing
-                // its initially hidden desktop source. This wait runs only during initialization.
-                unsafe { self.composition.native.WaitForCommitCompletion()? };
-            }
+        let visibility_changed = self
+            .windows
+            .iter()
+            .map(|window| window.hwnd)
+            .ne(self.pending_windows.iter().map(|window| window.hwnd));
+        if self.windows != self.pending_windows {
             let hidden_source = self.windows.iter().any(|window| {
                 self.pending_hidden
                     .binary_search_by_key(&(window.hwnd.0 as usize), |hwnd| hwnd.0 as usize)
@@ -340,13 +331,11 @@ impl Scene {
                 &self.wallpapers.sources.roots,
                 &self.pending_hidden,
             );
-            changed_at = visibility_changed.then(Instant::now);
             self.refresh_desktop(excluded, hidden_source, !self.pending_windows.is_empty())?;
-            self.desktop_dirty = false;
             std::mem::swap(&mut self.windows, &mut self.pending_windows);
         }
         std::mem::swap(&mut self.hidden_windows, &mut self.pending_hidden);
-        Ok(changed_at)
+        Ok(visibility_changed)
     }
 
     fn refresh_desktop(
@@ -387,7 +376,7 @@ impl Scene {
             }
         };
         // SAFETY: Visual replacement is committed atomically on its owning compositor. The old
-        // thumbnail stays alive until that commit completes; steady geometry updates do not wait.
+        // thumbnail stays alive until that commit completes; geometry-only updates do not wait.
         unsafe {
             if let Some((_, visual)) = &replacement {
                 if self.desktop_visible {
@@ -408,10 +397,8 @@ impl Scene {
             self.composition.native.Commit().map_err(|error| {
                 Error::new(error.code(), format!("Commit desktop geometry: {error}"))
             })?;
-            if self.desktop_dirty || replacement.is_some() {
-                self.composition.native.WaitForCommitCompletion()?;
-            }
             if let Some((desktop, visual)) = replacement {
+                self.composition.native.WaitForCommitCompletion()?;
                 self.desktop_visual = visual;
                 self.desktop = desktop;
                 log::debug!("Liquid glass desktop source replaced");
@@ -457,11 +444,11 @@ impl Scene {
             let excluded =
                 capture_exclusions(&self.excluded, &next.sources.roots, &self.hidden_windows);
             self.desktop.set_excluded(excluded)?;
-            // SAFETY: Both wallpaper trees and the window visual share this compositor. The
-            // old thumbnails remain registered until the replacement has reached DWM.
+            // SAFETY: Both wallpaper visuals are live on this compositor until the commit finishes.
+            // Insert behind the old wallpaper; a null reference with insertAbove=false means topmost.
             unsafe {
                 self.wrapper
-                    .AddVisual(&next.visual, false, None::<&IDCompositionVisual>)?;
+                    .AddVisual(&next.visual, false, &self.wallpapers.visual)?;
                 self.wrapper.RemoveVisual(&self.wallpapers.visual)?;
                 self.composition.native.Commit()?;
                 self.composition.native.WaitForCommitCompletion()?;
