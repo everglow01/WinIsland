@@ -229,7 +229,7 @@ impl App {
         self.update_assistant_reveal(&window);
         self.serve_assistant_requests();
         self.sync_chat_focus();
-        self.update_lyrics(&window, music_active, is_paused, dt);
+        self.update_lyrics(&window, music_active, dt);
         self.update_spring_targets(&window, music_active, is_paused, dt);
         self.update_compact_widget_refresh(&window, now);
         self.update_hit_regions(&window, plugin_input.captured);
@@ -967,34 +967,43 @@ impl App {
         }
     }
 
-    fn update_lyrics(&mut self, window: &WindowRef, music_active: bool, is_paused: bool, dt: f32) {
-        let current_lyric = if music_active && self.config.show_lyrics && !is_paused {
-            self.current_media_info()
-                .current_lyric(
-                    (self.config.lyrics_delay * 1000.0) as i64,
-                    LYRIC_TRANSITION_LEAD_MS,
-                )
-                .map(|lyric| {
-                    (
-                        lyric.text.to_owned(),
-                        lyric.secondary_text.unwrap_or_default().to_owned(),
-                        lyric.font_family.map(str::to_owned),
-                        lyric.highlight,
-                        lyric.started,
+    fn update_lyrics(&mut self, window: &WindowRef, music_active: bool, dt: f32) {
+        let current_lyric = if music_active {
+            let media = self.current_media_info();
+            if self.config.show_lyrics
+                && media.lyrics.as_ref().is_some_and(|lines| !lines.is_empty())
+            {
+                media
+                    .current_lyric(
+                        (self.config.lyrics_delay * 1000.0) as i64,
+                        LYRIC_TRANSITION_LEAD_MS,
                     )
-                })
+                    .map(|lyric| {
+                        (
+                            lyric.text,
+                            lyric.secondary_text.unwrap_or_default(),
+                            lyric.font_family,
+                            lyric.highlight,
+                            lyric.started,
+                        )
+                    })
+            } else if self.config.show_title_when_no_lyrics && !media.title.trim().is_empty() {
+                Some((media.title.as_str(), "", None, None, false))
+            } else {
+                None
+            }
         } else {
             None
         };
         if let Some((lyric, secondary_lyric, font_family, highlight, started)) = current_lyric {
             if lyric != self.lyrics.current_text
                 || secondary_lyric != self.lyrics.current_secondary_text
-                || font_family != self.lyrics.current_font_family
+                || font_family != self.lyrics.current_font_family.as_deref()
             {
                 self.lyrics.transition_to(
-                    lyric,
-                    secondary_lyric,
-                    font_family,
+                    lyric.to_owned(),
+                    secondary_lyric.to_owned(),
+                    font_family.map(str::to_owned),
                     highlight,
                     started,
                     self.config.lyrics_transition_animation,
@@ -1004,7 +1013,7 @@ impl App {
                 self.lyrics.highlight = highlight;
                 window.request_redraw();
             }
-        } else if !is_paused && !self.lyrics.current_text.is_empty() {
+        } else if !self.lyrics.current_text.is_empty() {
             self.lyrics.transition_to(
                 String::new(),
                 String::new(),

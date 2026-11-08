@@ -193,10 +193,6 @@ pub fn load_config_at(path: &Path) -> AppConfig {
         config.lyrics_mode = "online".to_string();
         migrated = true;
     }
-    if config.lyrics_mode == "lrc" && !config.show_lyrics {
-        config.show_lyrics = true;
-        migrated = true;
-    }
     if ensure_settings_widget(&mut config.widget_layout) {
         migrated = true;
     }

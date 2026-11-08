@@ -462,11 +462,10 @@ impl App {
             && compact
             && !self.is_width_hiding()
         {
-            let has_visible_lyrics = self.config.show_lyrics
-                && (!self.lyrics.current_text.is_empty()
-                    || (!self.lyrics.old_text.is_empty() && self.lyrics.transition < 1.0));
+            let has_visible_text = !self.lyrics.current_text.is_empty()
+                || (!self.lyrics.old_text.is_empty() && self.lyrics.transition < 1.0);
 
-            if has_visible_lyrics {
+            if has_visible_text {
                 let (left_inset, right_inset) =
                     crate::ui::island::mini_lyric_insets(self.config.lyrics_side_gap);
                 let horizontal_insets = left_inset + right_inset;
