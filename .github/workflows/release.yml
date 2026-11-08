@@ -103,6 +103,9 @@ jobs:
       run: |
         choco install ninja innosetup -y
 
+    - name: Rebuild speech runtime after cache restore
+      run: cargo clean --release --package sherpa-onnx-sys
+
     - name: Build Release
       run: cargo build --release --locked --features lingosoul --verbose
       env:
