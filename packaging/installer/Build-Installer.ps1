@@ -13,7 +13,9 @@ param(
     [string]$CertificatePassword,
 
     [Parameter(Mandatory)]
-    [string]$OutputDirectory
+    [string]$OutputDirectory,
+
+    [switch]$WithoutLingoSoul
 )
 
 $ErrorActionPreference = 'Stop'
@@ -66,10 +68,24 @@ if (-not (Test-Path $executablePath)) {
     throw "Release executable was not found: $executablePath"
 }
 
+$speechLibraries = @('sherpa-onnx-c-api.dll', 'onnxruntime.dll', 'onnxruntime_providers_shared.dll')
+if (-not $WithoutLingoSoul) {
+    foreach ($library in $speechLibraries) {
+        if (-not (Test-Path -LiteralPath (Join-Path $releaseDirectory $library))) {
+            throw "LingoSoul runtime library was not found: $library"
+        }
+    }
+}
+
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $stageDirectory
 New-Item -ItemType Directory -Force -Path $identityDirectory, $resourceDirectory, $OutputDirectory | Out-Null
 
 Copy-Item -Path $executablePath -Destination (Join-Path $stageDirectory 'WinIsland.exe') -Force
+if (-not $WithoutLingoSoul) {
+    foreach ($library in $speechLibraries) {
+        Copy-Item -LiteralPath (Join-Path $releaseDirectory $library) -Destination (Join-Path $stageDirectory $library) -Force
+    }
+}
 Copy-Item -Path (Join-Path $repositoryRoot 'resources\icon-dark.png') -Destination (Join-Path $resourceDirectory 'icon-dark.png') -Force
 Copy-Item -Path (Join-Path $repositoryRoot 'resources\icon-dark.ico') -Destination (Join-Path $resourceDirectory 'icon-dark.ico') -Force
 Copy-Item -Path (Join-Path $repositoryRoot 'resources\licenses') -Destination $resourceDirectory -Recurse -Force

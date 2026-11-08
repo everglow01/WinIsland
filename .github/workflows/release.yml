@@ -104,7 +104,7 @@ jobs:
         choco install ninja innosetup -y
 
     - name: Build Release
-      run: cargo build --release --locked --verbose
+      run: cargo build --release --locked --features lingosoul --verbose
       env:
         WINISLAND_PACKAGE_CHANNEL: stable
 

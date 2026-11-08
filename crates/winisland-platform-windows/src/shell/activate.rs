@@ -1,4 +1,6 @@
+use std::os::windows::process::CommandExt;
 use std::path::Path;
+use std::process::{Command, Stdio};
 
 use windows::Win32::Foundation::{HANDLE, HWND, LPARAM};
 use windows::Win32::System::Com::{CLSCTX_LOCAL_SERVER, CoCreateInstance};
@@ -15,6 +17,60 @@ use winisland_platform::PlatformError;
 
 use crate::com::ComGuard;
 use crate::process;
+
+pub(super) fn launch_application(name: &str) -> Result<String, PlatformError> {
+    let name = name.trim().to_owned();
+    if name.is_empty() || name.contains('\0') {
+        return Err(PlatformError::Backend(
+            "An application name is required".into(),
+        ));
+    }
+    std::thread::spawn(move || {
+        let _com = ComGuard::sta()?;
+        if name.starts_with("ms-settings:") {
+            super::links::open_url(&name)?;
+            return Ok(name);
+        }
+        let output = Command::new("powershell.exe")
+            .creation_flags(0x0800_0000)
+            .args([
+                "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+                "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-StartApps | ForEach-Object { $_.Name + [char]9 + $_.AppID }",
+            ])
+            .stdin(Stdio::null()).stderr(Stdio::null()).output().map_err(PlatformError::backend)?;
+        if !output.status.success() {
+            return Err(PlatformError::Backend("Cannot enumerate installed applications".into()));
+        }
+        let normalize = |value: &str| value.chars()
+            .filter(|character| !character.is_whitespace() && !matches!(character, '-' | '_'))
+            .flat_map(char::to_lowercase).collect::<String>();
+        let wanted = normalize(&name);
+        if wanted.is_empty() { return Err(PlatformError::Backend("Invalid application name".into())); }
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut candidates: Vec<_> = text.lines().filter_map(|line| {
+            let (label, id) = line.split_once('\t')?;
+            let label = label.trim();
+            let id = id.trim();
+            let candidate = normalize(label);
+            let rank = if candidate == wanted || id.eq_ignore_ascii_case(&name) { 0 }
+                else if candidate.starts_with(&wanted) { 1 }
+                else if candidate.contains(&wanted) { 2 }
+                else { return None; };
+            Some((rank, label, id))
+        }).collect();
+        candidates.sort_unstable();
+        let Some(&(rank, label, id)) = candidates.first() else {
+            return Err(PlatformError::Backend(format!("No installed application matches '{name}'")));
+        };
+        if candidates.iter().skip(1).any(|candidate| candidate.0 == rank && candidate.1 != label) {
+            let names: Vec<_> = candidates.iter().filter(|candidate| candidate.0 == rank)
+                .take(8).map(|candidate| candidate.1).collect();
+            return Err(PlatformError::Backend(format!("Several applications match: {}", names.join(", "))));
+        }
+        super::links::open_url(&format!("shell:AppsFolder\\{id}"))?;
+        Ok(label.to_owned())
+    }).join().map_err(|_| PlatformError::Backend("Application launch worker panicked".into()))?
+}
 
 pub(super) fn application(app_user_model_id: &str) -> Result<bool, PlatformError> {
     if app_user_model_id.is_empty() {

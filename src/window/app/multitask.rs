@@ -13,7 +13,9 @@ const POP_AT_COLLAPSE: f32 = 0.5;
 impl App {
     pub(super) fn status_orb_rect(&self) -> Option<winisland_render::Rect> {
         let frame = self.multitask.frame().filter(|frame| {
-            (frame.task.content.has_timer() || frame.task.content.plugin_surface().is_some())
+            (frame.task.content.has_timer()
+                || frame.task.content.plugin_surface().is_some()
+                || frame.task.content.has_assistant())
                 && frame.content_opacity > 0.5
         })?;
         let layout = self.compute_island_layout();
@@ -61,6 +63,7 @@ impl App {
             activity,
             self.timer_content.filter(|_| self.timer_orb),
             plugin_status,
+            self.lingosoul.resume_activity(now),
             now,
         );
         let task = self.status_indicators.activity().map(|content| Task {

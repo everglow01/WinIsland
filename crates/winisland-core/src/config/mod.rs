@@ -75,13 +75,11 @@ pub struct AppConfig {
         "90" => "lingosoul_history_90d",
     ))]
     pub lingosoul_history_retention: String,
-    /// Start the installed LingoSoul agent together with the island.
+    #[serde(alias = "lingosoul_autostart")]
     #[setting(toggle)]
-    pub lingosoul_autostart: bool,
-    /// Install new LingoSoul releases automatically while it is idle.
-    #[educe(Default = true)]
+    pub lingosoul_enabled: bool,
     #[setting(toggle)]
-    pub lingosoul_auto_update: bool,
+    pub lingosoul_hold_to_talk: bool,
     #[setting(number(min = 0.0, max = 50.0, step = 1.0))]
     pub glass_blur: f32,
     #[educe(Default = true)]

@@ -68,7 +68,7 @@ jobs:
       run: |
         choco install ninja innosetup -y
     - name: Build Release
-      run: cargo build --release --verbose
+      run: cargo build --release --features lingosoul --verbose
       env:
         WINISLAND_PACKAGE_CHANNEL: nightly
         WINISLAND_BUILD_NUMBER: ${{ github.run_number }}

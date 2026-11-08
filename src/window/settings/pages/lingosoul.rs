@@ -1,20 +1,18 @@
-use crate::core::assistant::{PROTOCOL, agent_status, local_parts, read_history};
-use crate::core::lingosoul_config::{AgentPreset, LLM_PRESETS, LingoSoulConfig};
-use crate::core::lingosoul_install::{self, InstallState};
-use crate::utils::settings_ui::ClickResult;
-use crate::utils::settings_ui::items::SettingsItem;
-use toml::Value;
+use std::path::PathBuf;
+
+use winisland_core::assistant::ModelState;
 use winisland_core::config::AppConfigField;
-use winisland_core::i18n::tr;
+use winisland_core::i18n::{tr, tr_args};
+use winisland_lingosoul::ApiFormat;
+
+use crate::core::assistant::{assistant_status, history_path};
+use crate::core::lingosoul_config::{LingoSoulConfig, paths};
+use crate::utils::settings_ui::ClickResult;
+use crate::utils::settings_ui::items::{CONTENT_PADDING, GROUP_INNER_PAD, SettingsItem};
 
 use super::super::{PluginSettingsRequest, PopupState, SettingsApp};
 use super::{PageInput, SettingsPage};
 
-const PREVIEW_CHARS: usize = 80;
-const MODE_AGENT: &str = "agent";
-const LLM_CUSTOM: &str = "custom";
-
-/// A text value in the agent config.
 #[derive(Clone, Copy)]
 pub(crate) enum LingoSoulField {
     Name,
@@ -23,151 +21,87 @@ pub(crate) enum LingoSoulField {
     Model,
     BaseUrl,
     Proxy,
-    City,
 }
 
-/// A choice in the agent config, picked from a popup.
 #[derive(Clone, Copy)]
-pub(crate) enum LingoSoulChoice {
-    Mode,
-    Agent,
-    Service,
-    Permission,
+pub(crate) enum Permission {
+    Read,
+    Write,
+    Execute,
 }
 
 #[derive(Clone, Copy)]
 pub(crate) enum LingoSoulAction {
-    Clear,
     Text(LingoSoulField),
-    Choice(LingoSoulChoice),
-    Tools,
-    Agent(AgentPreset),
-    Folder,
-    Install,
-    Process,
+    Format,
+    Models,
+    OpenChat,
+    OpenHistory,
+    Clear,
+    Agent,
+    Permission(Permission),
+    Workspace,
+    AddReadDirectory,
+    ReadDirectory(usize),
+    EditPrompt,
 }
 
 impl LingoSoulField {
-    fn key(self) -> (&'static str, &'static str) {
-        match self {
-            Self::Name => ("assistant", "name"),
-            Self::WakeWords => ("assistant", "wake_words"),
-            Self::ApiKey => ("llm", "api_key"),
-            Self::Model => ("llm", "model"),
-            Self::BaseUrl => ("llm", "base_url"),
-            Self::Proxy => ("llm", "proxy"),
-            Self::City => ("tools", "city"),
-        }
-    }
-
     fn value(self, config: &LingoSoulConfig) -> String {
         match self {
+            Self::Name => config.settings.assistant.name.clone(),
             Self::WakeWords => config.wake_words(),
-            _ => {
-                let (section, key) = self.key();
-                config.text(section, key)
-            }
+            Self::ApiKey => config.settings.llm.api_key.clone(),
+            Self::Model => config.settings.llm.model.clone(),
+            Self::BaseUrl => config.settings.llm.base_url.clone(),
+            Self::Proxy => config.settings.llm.proxy.clone(),
         }
     }
 }
 
-/// Options of a popup as (label, value) pairs and the selected value.
-fn choice_options(
-    choice: LingoSoulChoice,
-    config: &LingoSoulConfig,
-) -> (Vec<(String, String)>, String) {
-    match choice {
-        LingoSoulChoice::Mode => (
-            vec![
-                (tr("lingosoul_mode_api"), "api".to_owned()),
-                (tr("lingosoul_mode_agent"), MODE_AGENT.to_owned()),
-            ],
-            if config.text("assistant", "mode") == MODE_AGENT {
-                MODE_AGENT.to_owned()
-            } else {
-                "api".to_owned()
-            },
-        ),
-        LingoSoulChoice::Agent => {
-            let agents = config.enabled_agents();
-            let current = config.text("assistant", "agent");
-            let selected = agents
-                .iter()
-                .find(|name| name.eq_ignore_ascii_case(current.trim()))
-                .or_else(|| agents.first())
-                .cloned()
-                .unwrap_or_default();
-            (
-                agents
-                    .into_iter()
-                    .map(|name| (name.clone(), name))
-                    .collect(),
-                selected,
-            )
+fn save_config(app: &mut SettingsApp, config: &LingoSoulConfig) {
+    match config.save() {
+        Ok(()) => {
+            app.lingosoul_error = None;
+            app.plugin_request = Some(PluginSettingsRequest::ReloadLingoSoul);
         }
-        LingoSoulChoice::Service => (
-            LLM_PRESETS
-                .iter()
-                .enumerate()
-                .map(|(index, (label, ..))| (tr(label), index.to_string()))
-                .chain([(tr("lingosoul_llm_custom"), LLM_CUSTOM.to_owned())])
-                .collect(),
-            config
-                .llm_preset()
-                .map_or_else(|| LLM_CUSTOM.to_owned(), |index| index.to_string()),
-        ),
-        LingoSoulChoice::Permission => (
-            vec![
-                (tr("lingosoul_agent_write"), "write".to_owned()),
-                (tr("lingosoul_agent_read"), "read".to_owned()),
-            ],
-            if config.agent_can_write() {
-                "write".to_owned()
-            } else {
-                "read".to_owned()
-            },
-        ),
+        Err(error) => app.lingosoul_error = Some(error),
     }
+    app.mark_items_dirty();
+    app.request_redraw();
 }
 
-/// One line of a message for the list: no Markdown marks, cut to a preview.
-fn preview(text: &str) -> String {
-    let flat = text
-        .lines()
-        .map(|line| {
-            line.trim()
-                .trim_start_matches(['#', '-', '*', '>', '|', ' '])
-        })
-        .filter(|line| !line.is_empty() && !line.starts_with("```"))
-        .collect::<Vec<_>>()
-        .join(" ")
-        .replace(['*', '`', '|'], "");
-    if flat.chars().count() <= PREVIEW_CHARS {
-        flat
-    } else {
-        flat.chars().take(PREVIEW_CHARS).collect::<String>() + "…"
+fn commit_text(app: &mut SettingsApp, value: &str) {
+    let Some(field) = app.lingosoul_field.take() else {
+        return;
+    };
+    let mut config = LingoSoulConfig::load();
+    let value = value.trim();
+    if field.value(&config) == value {
+        return;
     }
+    match field {
+        LingoSoulField::Name => config.settings.assistant.name = value.into(),
+        LingoSoulField::WakeWords => config.set_wake_words(value),
+        LingoSoulField::ApiKey => config.settings.llm.api_key = value.into(),
+        LingoSoulField::Model => config.settings.llm.model = value.into(),
+        LingoSoulField::BaseUrl => config.settings.llm.base_url = value.into(),
+        LingoSoulField::Proxy => config.settings.llm.proxy = value.into(),
+    }
+    save_config(app, &config);
 }
 
-fn row_choice(
-    page: &mut SettingsPage<LingoSoulAction>,
-    config: &LingoSoulConfig,
-    label: &str,
-    choice: LingoSoulChoice,
-) {
-    let (options, selected) = choice_options(choice, config);
-    page.row_source(
-        tr(label),
-        options
-            .into_iter()
-            .map(|(label, value)| (label, value == selected))
-            .collect(),
-        true,
-        LingoSoulAction::Choice(choice),
-    );
+fn select_format(app: &mut SettingsApp, value: &str) {
+    let mut config = LingoSoulConfig::load();
+    config.settings.llm.format = match value {
+        "openai" => ApiFormat::Openai,
+        "anthropic" => ApiFormat::Anthropic,
+        _ => return,
+    };
+    save_config(app, &config);
 }
 
-fn row_field(
+fn field(
     page: &mut SettingsPage<LingoSoulAction>,
     config: &LingoSoulConfig,
     label: &str,
@@ -183,232 +117,258 @@ fn row_field(
     );
 }
 
-fn build_config_sections(page: &mut SettingsPage<LingoSoulAction>, config: &LingoSoulConfig) {
-    if config.broken {
-        page.section(tr("lingosoul_assistant_title"));
-        page.group_start();
-        page.row_label(tr("lingosoul_config_broken"));
-        page.row_label(
-            crate::core::lingosoul_config::config_path()
-                .display()
-                .to_string(),
-        );
-        page.group_end();
-        return;
-    }
-    let agent_mode = config.text("assistant", "mode") == MODE_AGENT;
-    page.section(tr("lingosoul_assistant_title"));
-    page.group_start();
-    row_field(
-        page,
-        config,
-        "lingosoul_name",
-        "lingosoul_name_hint",
-        LingoSoulField::Name,
-    );
-    row_field(
-        page,
-        config,
-        "lingosoul_wake_words",
-        "lingosoul_wake_words_hint",
-        LingoSoulField::WakeWords,
-    );
-    row_choice(page, config, "lingosoul_mode", LingoSoulChoice::Mode);
-    if agent_mode {
-        if config.enabled_agents().is_empty() {
-            page.row_label(tr("lingosoul_agent_none"));
-        } else {
-            row_choice(
-                page,
-                config,
-                "lingosoul_mode_agent_pick",
-                LingoSoulChoice::Agent,
-            );
+fn model_status(state: &ModelState) -> String {
+    match state {
+        ModelState::Missing => tr("lingosoul_models_missing"),
+        ModelState::Ready => tr("lingosoul_models_ready"),
+        ModelState::Installing => tr("lingosoul_models_installing"),
+        ModelState::Failed(error) => tr_args("lingosoul_models_failed", &[error]),
+        ModelState::Downloading {
+            file,
+            received,
+            total,
+            attempt,
+        } => {
+            let name = tr(match file.as_str() {
+                "silero-vad" => "lingosoul_model_vad",
+                "wake-word" => "lingosoul_model_wake",
+                _ => "lingosoul_model_asr",
+            });
+            let percent = if *total == 0 {
+                0.0
+            } else {
+                (*received).min(*total) as f64 / *total as f64 * 100.0
+            };
+            tr_args(
+                "lingosoul_models_progress",
+                &[&name, &format!("{percent:.0}"), &attempt.to_string()],
+            )
         }
     }
-    page.group_end();
-
-    if !agent_mode {
-        page.section(tr("lingosoul_llm_title"));
-        page.group_start();
-        row_choice(
-            page,
-            config,
-            "lingosoul_llm_service",
-            LingoSoulChoice::Service,
-        );
-        row_field(
-            page,
-            config,
-            "lingosoul_llm_key",
-            "lingosoul_llm_key_hint",
-            LingoSoulField::ApiKey,
-        );
-        row_field(
-            page,
-            config,
-            "lingosoul_llm_model",
-            "lingosoul_llm_model_hint",
-            LingoSoulField::Model,
-        );
-        if config.llm_preset().is_none() {
-            row_field(
-                page,
-                config,
-                "lingosoul_llm_url",
-                "lingosoul_llm_url_hint",
-                LingoSoulField::BaseUrl,
-            );
-        }
-        page.group_end();
-
-        page.section(tr("lingosoul_tools_title"));
-        page.group_start();
-        let tools = config.flag("tools", "enabled", true);
-        page.row_switch(
-            tr("lingosoul_tools_enabled"),
-            tools,
-            true,
-            LingoSoulAction::Tools,
-        );
-        if tools {
-            row_field(
-                page,
-                config,
-                "lingosoul_tools_city",
-                "lingosoul_tools_city_hint",
-                LingoSoulField::City,
-            );
-        }
-        page.group_end();
-    }
-
-    page.section(tr("lingosoul_network_title"));
-    page.group_start();
-    row_field(
-        page,
-        config,
-        "lingosoul_llm_proxy",
-        "lingosoul_llm_proxy_hint",
-        LingoSoulField::Proxy,
-    );
-    page.row_label(tr("lingosoul_network_note"));
-    page.group_end();
-
-    page.section(tr("lingosoul_agents_title"));
-    page.group_start();
-    for preset in AgentPreset::ALL {
-        page.row_switch(
-            preset.name().to_owned(),
-            config.agent_enabled(preset),
-            true,
-            LingoSoulAction::Agent(preset),
-        );
-    }
-    let folder = config.agent_folder();
-    page.row_folder(
-        tr("lingosoul_agent_folder"),
-        tr("folder_select"),
-        (!folder.is_empty()).then(|| tr("folder_clear")),
-        (!folder.is_empty()).then_some(folder),
-        true,
-        LingoSoulAction::Folder,
-    );
-    row_choice(
-        page,
-        config,
-        "lingosoul_agent_permission",
-        LingoSoulChoice::Permission,
-    );
-    page.row_label(tr("lingosoul_agents_note"));
-    page.group_end();
 }
 
-/// Writes the edited agent config and asks a running agent to load it.
-fn save_config(app: &mut SettingsApp, config: &LingoSoulConfig) {
-    if config.save() {
-        app.plugin_request = Some(PluginSettingsRequest::ReloadLingoSoul);
-    }
-    app.mark_items_dirty();
-    app.request_redraw();
-}
-
-fn commit_lingosoul_text(app: &mut SettingsApp, text: &str) {
-    let Some(field) = app.lingosoul_field.take() else {
-        return;
-    };
-    let mut config = LingoSoulConfig::load();
-    let text = text.trim();
-    if field.value(&config) == text {
-        return;
-    }
-    match field {
-        LingoSoulField::WakeWords => config.set_wake_words(text),
-        _ => {
-            let (section, key) = field.key();
-            config.set(section, key, Value::String(text.to_owned()));
+fn note(page: &mut SettingsPage<LingoSoulAction>, text: String, width: f32) {
+    for paragraph in text.lines() {
+        for line in winisland_render::text::FontManager::global().wrap_text(
+            paragraph,
+            13.0,
+            winisland_render::FontWeight::REGULAR,
+            width,
+        ) {
+            page.row_label(line);
         }
-    }
-    save_config(app, &config);
-}
-
-fn select_lingosoul_choice(app: &mut SettingsApp, value: &str) {
-    let Some(choice) = app.lingosoul_choice.take() else {
-        return;
-    };
-    let mut config = LingoSoulConfig::load();
-    match choice {
-        LingoSoulChoice::Mode => config.set("assistant", "mode", Value::String(value.to_owned())),
-        LingoSoulChoice::Agent => config.set("assistant", "agent", Value::String(value.to_owned())),
-        LingoSoulChoice::Service => match value.parse::<usize>() {
-            Ok(index) => config.apply_llm_preset(index),
-            Err(_) => config.apply_llm_custom(),
-        },
-        LingoSoulChoice::Permission => config.set_agent_can_write(value == "write"),
-    }
-    save_config(app, &config);
-}
-
-/// One line on whether the agent is installed, running, or setting itself up.
-fn program_status(installed: Option<&str>) -> String {
-    let status = agent_status();
-    if let InstallState::Failed(error) = lingosoul_install::state() {
-        return tr("lingosoul_install_failed").replace("{}", &error);
-    }
-    if lingosoul_install::state() == InstallState::Working {
-        return tr("lingosoul_installing");
-    }
-    if status.connected {
-        if status.protocol.is_some_and(|protocol| protocol != PROTOCOL) {
-            return tr("lingosoul_outdated");
-        }
-        return match &status.setup {
-            Some(Ok(progress)) if *progress < 1.0 => tr("lingosoul_models_downloading")
-                .replace("{}", &format!("{:.0}", progress * 100.0)),
-            Some(Err(error)) => tr("lingosoul_models_failed").replace("{}", error),
-            _ => {
-                tr("lingosoul_running").replace("{}", status.version.as_deref().unwrap_or_default())
-            }
-        };
-    }
-    match installed {
-        Some(version) => tr("lingosoul_stopped").replace("{}", version),
-        None => tr("lingosoul_not_installed"),
     }
 }
 
 impl SettingsApp {
-    pub(crate) fn build_lingosoul_page(&self, with_history: bool) -> SettingsPage<LingoSoulAction> {
+    fn build_lingosoul_page(&self) -> SettingsPage<LingoSoulAction> {
+        let config = LingoSoulConfig::load();
+        let note_width =
+            (self.content_width() - CONTENT_PADDING * 2.0 - GROUP_INNER_PAD * 2.0).max(1.0);
+        let mut status = assistant_status();
+        if status.models == ModelState::Missing && winisland_lingosoul::models_ready(&paths()) {
+            status.models = ModelState::Ready;
+        }
+        let working = matches!(
+            status.models,
+            ModelState::Downloading { .. } | ModelState::Installing
+        );
         let mut page = SettingsPage::new();
-        self.build_program_section(&mut page);
-        build_config_sections(&mut page, &LingoSoulConfig::load());
-        let history = if with_history {
-            read_history()
-        } else {
-            Vec::new()
-        };
+        page.section(tr("tab_lingosoul"));
+        page.group_start();
+        page.setting(&self.config, AppConfigField::LingosoulEnabled, true);
+        page.row_button(
+            tr("lingosoul_speech_models"),
+            tr(if working {
+                "lingosoul_models_cancel"
+            } else if status.models == ModelState::Ready {
+                "lingosoul_models_repair"
+            } else {
+                "lingosoul_models_download"
+            }),
+            true,
+            LingoSoulAction::Models,
+        );
+        note(&mut page, model_status(&status.models), note_width);
+        if let Some(error) = self.lingosoul_error.as_ref().or(status.error.as_ref()) {
+            note(&mut page, error.clone(), note_width);
+        }
+        page.row_button(
+            tr("lingosoul_chat_open"),
+            tr("lingosoul_chat_open_button"),
+            status.enabled,
+            LingoSoulAction::OpenChat,
+        );
+        page.group_end();
+        if let Some(error) = &config.error {
+            page.group_start();
+            note(
+                &mut page,
+                tr_args("lingosoul_config_error", &[error]),
+                note_width,
+            );
+            page.row_label(
+                crate::core::lingosoul_config::config_path()
+                    .display()
+                    .to_string(),
+            );
+            page.group_end();
+            return page;
+        }
+
+        page.section(tr("lingosoul_assistant_title"));
+        page.group_start();
+        field(
+            &mut page,
+            &config,
+            "lingosoul_name",
+            "lingosoul_name_hint",
+            LingoSoulField::Name,
+        );
+        field(
+            &mut page,
+            &config,
+            "lingosoul_wake_words",
+            "lingosoul_wake_words_hint",
+            LingoSoulField::WakeWords,
+        );
+        page.setting(&self.config, AppConfigField::LingosoulHoldToTalk, true);
+        note(&mut page, tr("lingosoul_hold_to_talk_note"), note_width);
+        page.group_end();
+
+        page.section(tr("lingosoul_llm_title"));
+        page.group_start();
+        page.row_source(
+            tr("lingosoul_api_format"),
+            vec![
+                (
+                    tr("lingosoul_format_openai"),
+                    config.settings.llm.format == ApiFormat::Openai,
+                ),
+                (
+                    tr("lingosoul_format_anthropic"),
+                    config.settings.llm.format == ApiFormat::Anthropic,
+                ),
+            ],
+            true,
+            LingoSoulAction::Format,
+        );
+        field(
+            &mut page,
+            &config,
+            "lingosoul_llm_url",
+            "lingosoul_llm_url_hint",
+            LingoSoulField::BaseUrl,
+        );
+        field(
+            &mut page,
+            &config,
+            "lingosoul_llm_model",
+            "lingosoul_llm_model_hint",
+            LingoSoulField::Model,
+        );
+        field(
+            &mut page,
+            &config,
+            "lingosoul_llm_key",
+            "lingosoul_llm_key_hint",
+            LingoSoulField::ApiKey,
+        );
+        field(
+            &mut page,
+            &config,
+            "lingosoul_llm_proxy",
+            "lingosoul_llm_proxy_hint",
+            LingoSoulField::Proxy,
+        );
+        note(&mut page, tr("lingosoul_network_note"), note_width);
+        page.group_end();
+
+        page.section(tr("lingosoul_prompts_title"));
+        page.group_start();
+        page.row_button(
+            tr("lingosoul_prompt_file"),
+            tr("lingosoul_prompt_edit"),
+            true,
+            LingoSoulAction::EditPrompt,
+        );
+        page.group_end();
+
+        page.section(tr("lingosoul_local_agent_title"));
+        page.group_start();
+        let agent = &config.settings.local_agent;
+        page.row_switch(
+            tr("lingosoul_local_agent_enabled"),
+            agent.enabled,
+            true,
+            LingoSoulAction::Agent,
+        );
+        if agent.enabled {
+            let workspace = (!agent.workspace.as_os_str().is_empty())
+                .then(|| agent.workspace.display().to_string());
+            page.row_folder(
+                tr("lingosoul_workspace"),
+                tr("folder_select"),
+                workspace.as_ref().map(|_| tr("folder_clear")),
+                workspace,
+                true,
+                LingoSoulAction::Workspace,
+            );
+            for (label, allowed, permission) in [
+                (
+                    "lingosoul_permission_read",
+                    agent.allow_read,
+                    Permission::Read,
+                ),
+                (
+                    "lingosoul_permission_write",
+                    agent.allow_write,
+                    Permission::Write,
+                ),
+                (
+                    "lingosoul_permission_execute",
+                    agent.allow_execute,
+                    Permission::Execute,
+                ),
+            ] {
+                page.row_switch(
+                    tr(label),
+                    allowed,
+                    true,
+                    LingoSoulAction::Permission(permission),
+                );
+            }
+            note(&mut page, tr("lingosoul_agent_scope_note"), note_width);
+            if agent.allow_execute {
+                note(&mut page, tr("lingosoul_execute_note"), note_width);
+            }
+            for (index, directory) in agent.read_directories.iter().enumerate() {
+                page.row_folder(
+                    tr("lingosoul_read_directory"),
+                    tr("folder_select"),
+                    Some(tr("folder_clear")),
+                    Some(directory.display().to_string()),
+                    true,
+                    LingoSoulAction::ReadDirectory(index),
+                );
+            }
+            page.row_button(
+                tr("lingosoul_add_read_directory"),
+                tr("folder_select"),
+                true,
+                LingoSoulAction::AddReadDirectory,
+            );
+        }
+        page.group_end();
+
         page.section(tr("lingosoul_history_title"));
         page.group_start();
+        page.row_button(
+            tr("lingosoul_history_folder"),
+            tr("lingosoul_history_open"),
+            true,
+            LingoSoulAction::OpenHistory,
+        );
         page.setting(
             &self.config,
             AppConfigField::LingosoulHistoryRetention,
@@ -417,90 +377,19 @@ impl SettingsApp {
         page.row_button(
             tr("lingosoul_history_clear"),
             tr("lingosoul_chat_clear"),
-            !with_history || !history.is_empty(),
+            true,
             LingoSoulAction::Clear,
         );
         page.group_end();
-        if !with_history {
-            return page;
-        }
-        if history.is_empty() {
-            page.group_start();
-            page.row_label(tr("lingosoul_history_empty"));
-            page.group_end();
-            return page;
-        }
-        let you = tr("lingosoul_history_you");
-        let assistant = tr("lingosoul_chat_title");
-        let mut days: Vec<((i64, u32, u32), Vec<String>)> = Vec::new();
-        for message in &history {
-            let (year, month, day, hour, minute) = local_parts(message.at_ms);
-            let row = format!(
-                "{hour:02}:{minute:02}   {}：{}",
-                if message.from_user { &you } else { &assistant },
-                preview(&message.text)
-            );
-            match days.last_mut() {
-                Some((key, rows)) if *key == (year, month, day) => rows.push(row),
-                _ => days.push(((year, month, day), vec![row])),
-            }
-        }
-        for ((year, month, day), rows) in days.into_iter().rev() {
-            page.section(format!("{year}-{month:02}-{day:02}"));
-            page.group_start();
-            for row in rows {
-                page.row_label(row);
-            }
-            page.group_end();
-        }
         page
     }
 
-    fn build_program_section(&self, page: &mut SettingsPage<LingoSoulAction>) {
-        let installed = lingosoul_install::agent_exe().map(|_| {
-            lingosoul_install::installed_version()
-                .unwrap_or_else(|| tr("lingosoul_version_unknown"))
-        });
-        let running = agent_status().connected;
-        let working = lingosoul_install::state() == InstallState::Working;
-        page.section(tr("lingosoul_program_title"));
-        page.group_start();
-        page.row_label(program_status(installed.as_deref()));
-        page.row_button(
-            tr(if installed.is_some() {
-                "lingosoul_update"
-            } else {
-                "lingosoul_install"
-            }),
-            tr(if installed.is_some() {
-                "lingosoul_update_button"
-            } else {
-                "lingosoul_install_button"
-            }),
-            !working,
-            LingoSoulAction::Install,
-        );
-        page.row_button(
-            tr("lingosoul_process"),
-            tr(if running {
-                "lingosoul_stop_button"
-            } else {
-                "lingosoul_start_button"
-            }),
-            !working && (running || installed.is_some()),
-            LingoSoulAction::Process,
-        );
-        page.setting(&self.config, AppConfigField::LingosoulAutostart, true);
-        page.setting(&self.config, AppConfigField::LingosoulAutoUpdate, true);
-        page.group_end();
-    }
-
     pub(crate) fn build_lingosoul_items(&self) -> Vec<SettingsItem> {
-        self.build_lingosoul_page(true).into_items()
+        self.build_lingosoul_page().into_items()
     }
 
     pub(crate) fn handle_lingosoul_click(&mut self, input: PageInput) {
-        let page = self.build_lingosoul_page(true);
+        let page = self.build_lingosoul_page();
         let result = input.hit_test(&page);
         if self.handle_setting_click(&page, &result, input) {
             return;
@@ -509,77 +398,138 @@ impl SettingsApp {
             return;
         };
         match (action, &result) {
+            (LingoSoulAction::Models, ClickResult::RowButton(_)) => {
+                self.plugin_request = Some(
+                    if matches!(
+                        assistant_status().models,
+                        ModelState::Downloading { .. } | ModelState::Installing
+                    ) {
+                        PluginSettingsRequest::CancelLingoSoulDownload
+                    } else {
+                        PluginSettingsRequest::DownloadLingoSoulModels
+                    },
+                );
+            }
+            (LingoSoulAction::OpenChat, ClickResult::RowButton(_)) => {
+                self.plugin_request = Some(PluginSettingsRequest::OpenLingoSoulChat)
+            }
+            (LingoSoulAction::OpenHistory, ClickResult::RowButton(_)) => {
+                let history = history_path();
+                let directory = history
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                    .unwrap_or(std::path::Path::new("."));
+                let result = std::fs::create_dir_all(directory)
+                    .map_err(|error| error.to_string())
+                    .and_then(|()| {
+                        crate::platform::shell()
+                            .reveal_path(directory)
+                            .map_err(|error| error.to_string())
+                    });
+                self.lingosoul_error = result.err();
+                self.mark_items_dirty();
+                self.request_redraw();
+            }
             (LingoSoulAction::Clear, ClickResult::RowButton(_)) => {
-                self.plugin_request = Some(PluginSettingsRequest::ClearLingoSoulHistory);
-            }
-            (LingoSoulAction::Install, ClickResult::RowButton(_)) => {
-                // Installing means wanting it: start it with the island from now on.
-                if !self.config.lingosoul_autostart {
-                    self.config.lingosoul_autostart = true;
-                    self.persist_settings_change();
-                }
-                self.plugin_request = Some(PluginSettingsRequest::InstallLingoSoul);
-            }
-            (LingoSoulAction::Process, ClickResult::RowButton(_)) => {
-                self.plugin_request = Some(if agent_status().connected {
-                    PluginSettingsRequest::StopLingoSoul
-                } else {
-                    PluginSettingsRequest::StartLingoSoul
-                });
+                self.plugin_request = Some(PluginSettingsRequest::ClearLingoSoulHistory)
             }
             (LingoSoulAction::Text(field), ClickResult::TextField(index)) => {
-                let config = LingoSoulConfig::load();
                 self.lingosoul_field = Some(field);
                 let rect = input.text_field_rect(&page, *index, self.scroll_y);
-                self.begin_text_input(rect, field.value(&config), commit_lingosoul_text);
+                self.begin_text_input(rect, field.value(&LingoSoulConfig::load()), commit_text);
             }
-            (LingoSoulAction::Choice(choice), ClickResult::SourceButton(index)) => {
-                let (options, selected) = choice_options(choice, &LingoSoulConfig::load());
-                if options.is_empty() {
-                    return;
-                }
-                self.lingosoul_choice = Some(choice);
+            (LingoSoulAction::Format, ClickResult::SourceButton(index)) => {
+                let config = LingoSoulConfig::load();
                 let rect = input.popup_button_rect(&page, *index, self.scroll_y);
                 let (width, height) = self.logical_window_size();
-                let selected = options
-                    .iter()
-                    .position(|(_, value)| *value == selected)
-                    .unwrap_or_default();
-                let (labels, values) = options.into_iter().unzip();
                 self.show_popup(PopupState::new(
-                    select_lingosoul_choice,
+                    select_format,
                     rect,
-                    labels,
-                    values,
-                    selected,
+                    vec![
+                        tr("lingosoul_format_openai"),
+                        tr("lingosoul_format_anthropic"),
+                    ],
+                    vec!["openai".into(), "anthropic".into()],
+                    usize::from(config.settings.llm.format == ApiFormat::Anthropic),
                     width,
                     height,
                 ));
             }
-            (LingoSoulAction::Tools, ClickResult::Switch(_)) => {
+            (LingoSoulAction::Agent, ClickResult::Switch(_)) => {
                 let mut config = LingoSoulConfig::load();
-                let on = config.flag("tools", "enabled", true);
-                config.set("tools", "enabled", Value::Boolean(!on));
+                config.settings.local_agent.enabled = !config.settings.local_agent.enabled;
                 save_config(self, &config);
             }
-            (LingoSoulAction::Agent(preset), ClickResult::Switch(_)) => {
+            (LingoSoulAction::Permission(permission), ClickResult::Switch(_)) => {
                 let mut config = LingoSoulConfig::load();
-                let on = config.agent_enabled(preset);
-                config.set_agent_enabled(preset, !on);
+                let enabled = match permission {
+                    Permission::Read => &mut config.settings.local_agent.allow_read,
+                    Permission::Write => &mut config.settings.local_agent.allow_write,
+                    Permission::Execute => &mut config.settings.local_agent.allow_execute,
+                };
+                *enabled = !*enabled;
                 save_config(self, &config);
             }
-            (LingoSoulAction::Folder, ClickResult::FolderSelect(_)) => {
-                let Some(path) = rfd::FileDialog::new().pick_folder() else {
+            (
+                LingoSoulAction::Workspace
+                | LingoSoulAction::ReadDirectory(_)
+                | LingoSoulAction::AddReadDirectory,
+                ClickResult::FolderSelect(_) | ClickResult::RowButton(_),
+            ) => {
+                let Some(directory) = rfd::FileDialog::new().pick_folder() else {
                     return;
                 };
                 let mut config = LingoSoulConfig::load();
-                config.set_agent_folder(&path.to_string_lossy());
+                match action {
+                    LingoSoulAction::Workspace => config.settings.local_agent.workspace = directory,
+                    LingoSoulAction::ReadDirectory(index) => {
+                        if let Some(current) =
+                            config.settings.local_agent.read_directories.get_mut(index)
+                        {
+                            *current = directory;
+                        }
+                    }
+                    LingoSoulAction::AddReadDirectory => {
+                        if !config
+                            .settings
+                            .local_agent
+                            .read_directories
+                            .contains(&directory)
+                        {
+                            config.settings.local_agent.read_directories.push(directory);
+                        }
+                    }
+                    _ => return,
+                }
                 save_config(self, &config);
             }
-            (LingoSoulAction::Folder, ClickResult::FolderClear(_)) => {
+            (
+                LingoSoulAction::Workspace | LingoSoulAction::ReadDirectory(_),
+                ClickResult::FolderClear(_),
+            ) => {
                 let mut config = LingoSoulConfig::load();
-                config.set_agent_folder("");
+                match action {
+                    LingoSoulAction::Workspace => {
+                        config.settings.local_agent.workspace = PathBuf::new()
+                    }
+                    LingoSoulAction::ReadDirectory(index)
+                        if index < config.settings.local_agent.read_directories.len() =>
+                    {
+                        config.settings.local_agent.read_directories.remove(index);
+                    }
+                    _ => return,
+                }
                 save_config(self, &config);
+            }
+            (LingoSoulAction::EditPrompt, ClickResult::RowButton(_)) => {
+                let result = winisland_lingosoul::initialize_prompts(&paths()).and_then(|()| {
+                    crate::platform::shell()
+                        .reveal_path(&LingoSoulConfig::load().prompt_path())
+                        .map_err(|error| error.to_string())
+                });
+                self.lingosoul_error = result.err();
+                self.mark_items_dirty();
+                self.request_redraw();
             }
             _ => {}
         }

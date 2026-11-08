@@ -20,6 +20,7 @@ pub const STEPPER_ARROW_W: f32 = 18.0;
 
 pub const POPUP_BTN_W: f32 = 112.0;
 pub const POPUP_BTN_H: f32 = 24.0;
+#[cfg(feature = "lingosoul")]
 pub const TEXT_FIELD_W: f32 = 240.0;
 pub const POPUP_BTN_R: f32 = 6.0;
 pub const POPUP_ITEM_H: f32 = 32.0;
@@ -120,6 +121,7 @@ pub enum SettingsItem {
         label: String,
     },
     /// A label with an editable single-line text field; `secret` hides the stored value.
+    #[cfg(feature = "lingosoul")]
     RowText {
         label: String,
         value: String,
@@ -176,6 +178,10 @@ impl SettingsItem {
     }
 
     pub fn is_row(&self) -> bool {
+        #[cfg(feature = "lingosoul")]
+        if matches!(self, SettingsItem::RowText { .. }) {
+            return true;
+        }
         matches!(
             self,
             SettingsItem::RowStepper { .. }
@@ -185,7 +191,6 @@ impl SettingsItem {
                 | SettingsItem::RowButton { .. }
                 | SettingsItem::RowAppItem { .. }
                 | SettingsItem::RowLabel { .. }
-                | SettingsItem::RowText { .. }
         )
     }
 }

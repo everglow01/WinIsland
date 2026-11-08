@@ -58,20 +58,25 @@ impl App {
             Some(crate::window::settings::PluginSettingsRequest::ShowGuide) => {
                 self.open_guide();
             }
+            #[cfg(feature = "lingosoul")]
             Some(crate::window::settings::PluginSettingsRequest::ClearLingoSoulHistory) => {
                 self.clear_lingosoul_history();
             }
+            #[cfg(feature = "lingosoul")]
             Some(crate::window::settings::PluginSettingsRequest::ReloadLingoSoul) => {
                 self.reload_lingosoul();
             }
-            Some(crate::window::settings::PluginSettingsRequest::InstallLingoSoul) => {
-                self.install_lingosoul();
+            #[cfg(feature = "lingosoul")]
+            Some(crate::window::settings::PluginSettingsRequest::DownloadLingoSoulModels) => {
+                self.download_lingosoul_models();
             }
-            Some(crate::window::settings::PluginSettingsRequest::StartLingoSoul) => {
-                self.start_lingosoul();
+            #[cfg(feature = "lingosoul")]
+            Some(crate::window::settings::PluginSettingsRequest::CancelLingoSoulDownload) => {
+                self.cancel_lingosoul_download();
             }
-            Some(crate::window::settings::PluginSettingsRequest::StopLingoSoul) => {
-                self.stop_lingosoul();
+            #[cfg(feature = "lingosoul")]
+            Some(crate::window::settings::PluginSettingsRequest::OpenLingoSoulChat) => {
+                self.open_chat_panel();
             }
             Some(crate::window::settings::PluginSettingsRequest::LoadMarketplace) => {
                 self.load_plugin_marketplace();

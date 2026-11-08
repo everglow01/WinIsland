@@ -146,6 +146,9 @@ impl ShellIntegration for WindowsShell {
     fn activate_app(&self, app_user_model_id: &str) -> Result<bool, PlatformError> {
         activate::application(app_user_model_id)
     }
+    fn launch_application(&self, name: &str) -> Result<String, PlatformError> {
+        activate::launch_application(name)
+    }
     fn activate_media_app(&self, source_app_id: &str) -> Result<bool, PlatformError> {
         activate::media_application(source_app_id)
     }

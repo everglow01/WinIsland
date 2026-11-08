@@ -5,12 +5,20 @@ pub(crate) use device::StatusIndicators;
 use winisland_render::{Painter, Rect};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum AssistantActivity {
+    Working(f32),
+    Available,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Activity {
     Status {
         camera: f32,
         microphone: f32,
         timer: f32,
         plugin: f32,
+        assistant: f32,
+        assistant_activity: AssistantActivity,
         shared: f32,
         timer_progress: f32,
         timer_paused: bool,
@@ -28,6 +36,12 @@ impl Activity {
     pub(crate) fn has_timer(self) -> bool {
         match self {
             Self::Status { timer, .. } => timer > 0.5,
+        }
+    }
+
+    pub(crate) fn has_assistant(self) -> bool {
+        match self {
+            Self::Status { assistant, .. } => assistant > 0.5,
         }
     }
 
@@ -52,6 +66,8 @@ impl Activity {
                 timer,
                 timer_progress,
                 timer_paused,
+                assistant,
+                assistant_activity,
                 ..
             } => device::draw(
                 painter,
@@ -64,6 +80,8 @@ impl Activity {
                     timer,
                     timer_progress,
                     timer_paused,
+                    assistant,
+                    assistant_activity,
                 },
             ),
         }

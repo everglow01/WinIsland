@@ -3,14 +3,17 @@ use winisland_render::{Image, Rect, Rgba};
 
 use crate::utils::settings_ui::items::{
     CONTENT_PADDING, GROUP_INNER_PAD, POPUP_BTN_H, POPUP_BTN_W, ROW_HEIGHT, SettingsItem,
-    TEXT_FIELD_W, stepper_rects, trailing_control_rect,
+    stepper_rects,
 };
+#[cfg(feature = "lingosoul")]
+use crate::utils::settings_ui::items::{TEXT_FIELD_W, trailing_control_rect};
 use crate::utils::settings_ui::{ClickResult, hit_test};
 
 use super::{SIDEBAR_W, SettingsApp};
 
 pub mod about;
 pub mod general;
+#[cfg(feature = "lingosoul")]
 pub mod lingosoul;
 pub mod music;
 pub mod plugin_settings;
@@ -78,6 +81,7 @@ impl<A> SettingsPage<A> {
         );
     }
 
+    #[cfg(feature = "lingosoul")]
     pub(crate) fn row_text(
         &mut self,
         label: String,
@@ -277,6 +281,7 @@ impl PageInput {
         value.offset(winisland_render::Vec2::new(SIDEBAR_W, 0.0))
     }
 
+    #[cfg(feature = "lingosoul")]
     pub(crate) fn text_field_rect<A>(
         &self,
         page: &SettingsPage<A>,

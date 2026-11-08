@@ -55,12 +55,13 @@ pub(crate) enum BuiltinPage {
     Music,
     Widgets,
     Plugins,
+    #[cfg(feature = "lingosoul")]
     LingoSoul,
     About,
 }
 
 impl BuiltinPage {
-    pub(crate) const ALL: [Self; 10] = [
+    pub(crate) const ALL: &'static [Self] = &[
         Self::General,
         Self::Appearance,
         Self::Layout,
@@ -69,6 +70,7 @@ impl BuiltinPage {
         Self::Music,
         Self::Widgets,
         Self::Plugins,
+        #[cfg(feature = "lingosoul")]
         Self::LingoSoul,
         Self::About,
     ];
@@ -87,6 +89,7 @@ impl BuiltinPage {
             Self::Music => "tab_music",
             Self::Widgets => "tab_widgets",
             Self::Plugins => "tab_plugins",
+            #[cfg(feature = "lingosoul")]
             Self::LingoSoul => "tab_lingosoul",
             Self::About => "tab_about",
         }
@@ -205,15 +208,25 @@ pub(crate) enum PluginSettingsRequest {
     Install(std::path::PathBuf),
     LoadMarketplace,
     InstallMarketplace(Box<MarketplacePlugin>),
-    SetEnabled { id: String, enabled: bool },
-    Uninstall { id: String },
+    SetEnabled {
+        id: String,
+        enabled: bool,
+    },
+    Uninstall {
+        id: String,
+    },
     Restart,
     ShowGuide,
+    #[cfg(feature = "lingosoul")]
     ClearLingoSoulHistory,
+    #[cfg(feature = "lingosoul")]
     ReloadLingoSoul,
-    InstallLingoSoul,
-    StartLingoSoul,
-    StopLingoSoul,
+    #[cfg(feature = "lingosoul")]
+    DownloadLingoSoulModels,
+    #[cfg(feature = "lingosoul")]
+    CancelLingoSoulDownload,
+    #[cfg(feature = "lingosoul")]
+    OpenLingoSoulChat,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -308,8 +321,10 @@ pub struct SettingsApp {
     pub(crate) plugin_settings_error: Option<(u64, String)>,
     pub(crate) pending_plugin_setting: Option<PendingPluginSetting>,
     pub(crate) pending_setting: Option<AppConfigField>,
+    #[cfg(feature = "lingosoul")]
     pub(crate) lingosoul_field: Option<pages::lingosoul::LingoSoulField>,
-    pub(crate) lingosoul_choice: Option<pages::lingosoul::LingoSoulChoice>,
+    #[cfg(feature = "lingosoul")]
+    pub(crate) lingosoul_error: Option<String>,
     plugin_request: Option<PluginSettingsRequest>,
     close_requested: bool,
 }
@@ -446,8 +461,10 @@ impl SettingsApp {
             plugin_settings_error: None,
             pending_plugin_setting: None,
             pending_setting: None,
+            #[cfg(feature = "lingosoul")]
             lingosoul_field: None,
-            lingosoul_choice: None,
+            #[cfg(feature = "lingosoul")]
+            lingosoul_error: None,
             plugin_request: None,
             close_requested: false,
         }

@@ -729,6 +729,7 @@ impl AppHandler for App {
     }
 
     fn on_exit(&mut self) {
+        self.shutdown_assistant();
         self.device_feed = None;
         let _ = crate::platform::shell().set_plugin_commands(&[]);
         if let Some(host) = &self.plugin_host {

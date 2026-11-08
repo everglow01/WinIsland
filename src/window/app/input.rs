@@ -137,10 +137,19 @@ impl App {
     pub(super) fn handle_press(&mut self, rel_x: i32, rel_y: i32, layout: &IslandLayout) {
         crate::ui::expanded::timer_view::clear_selection();
         if !self.expanded
-            && self.status_orb_rect().is_some_and(|orb| {
-                orb.contains(winisland_render::Point::new(rel_x as f32, rel_y as f32))
-            })
+            && let Some(orb) = self.status_orb_rect()
+            && orb.contains(winisland_render::Point::new(rel_x as f32, rel_y as f32))
         {
+            if self
+                .multitask
+                .frame()
+                .is_some_and(|frame| frame.task.content.has_assistant())
+                && rel_x as f32 >= orb.right - orb.height()
+            {
+                self.open_chat_panel();
+                self.idle_timer = Instant::now();
+                return;
+            }
             let target = match self.multitask.frame().map(|frame| frame.task.content) {
                 Some(content) if content.has_timer() => Some(ExpandedPage::Timer),
                 Some(content) => content
