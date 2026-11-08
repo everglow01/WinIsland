@@ -65,8 +65,6 @@ pub struct AppConfig {
     pub liquid_glass_tint: f32,
     #[setting(toggle)]
     pub liquid_glass_siri: bool,
-    #[setting(toggle)]
-    pub liquid_glass_compat_capture: bool,
     #[educe(Default = "forever")]
     #[setting(choice(
         "forever" => "lingosoul_history_forever",

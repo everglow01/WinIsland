@@ -133,14 +133,9 @@ pub trait WindowSystem {
     /// Shapes the window backdrop as a rounded rectangle in client physical pixels; false means
     /// absent, and an update error releases it.
     fn update_window_backdrop(&self, id: WindowId, rect: [f32; 4], radius: f32) -> bool;
-    /// Starts screen sampling beneath an overlay on the adapter with `adapter_luid`, excluding the
-    /// overlay from all screen captures until stopped; unavailable support returns an error.
-    fn start_backdrop_capture(
-        &self,
-        id: WindowId,
-        adapter_luid: u64,
-        visible_to_capture: bool,
-    ) -> Result<(), PlatformError>;
+    /// Starts screen sampling beneath an overlay on the adapter with `adapter_luid`, excluding
+    /// the overlay only from its own background source; unavailable support returns an error.
+    fn start_backdrop_capture(&self, id: WindowId, adapter_luid: u64) -> Result<(), PlatformError>;
     /// Copies the newest screen content into the shared texture; `None` means no capture is
     /// running or no frame has arrived yet.
     fn update_backdrop_capture(

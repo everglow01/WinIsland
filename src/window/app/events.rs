@@ -386,49 +386,9 @@ impl App {
                             secondary_task,
                         );
                         let surface_bounds = surface.outline.bounds();
-                        let outline = secondary_task
-                            .filter(|_| {
-                                self.host_backdrop
-                                    && matches!(
-                                        self.config.island_style.as_str(),
-                                        "glass" | "dynamic"
-                                    )
-                            })
-                            .map(|_| {
-                                surface.outline.clip_segments(winisland_render::Point::new(
-                                    surface_bounds.left,
-                                    surface_bounds.top,
-                                ))
-                            });
                         let liquid_scale = self.config.compact_scale
                             + (self.config.expanded_scale - self.config.compact_scale)
                                 * progress.clamp(0.0, 1.0);
-                        let host_backdrop = super::system::update_host_backdrop(
-                            &mut self.host_backdrop,
-                            win.id(),
-                            HostBackdropParams {
-                                enabled: matches!(
-                                    self.config.island_style.as_str(),
-                                    "glass" | "dynamic"
-                                ),
-                                screen_x: self.geom.win_x as f32 + surface_bounds.left,
-                                screen_y: self.geom.win_y as f32 + surface_bounds.top,
-                                width: surface_bounds.width(),
-                                height: surface_bounds.height(),
-                                radius: self.springs.r.value,
-                                outline,
-                                extras: if self.config.island_style == "liquid" {
-                                    [None, None]
-                                } else {
-                                    pager_backdrop
-                                },
-                                blur: if self.config.island_style == "glass" {
-                                    self.config.glass_blur * liquid_scale
-                                } else {
-                                    0.0
-                                },
-                            },
-                        );
                         let (win_x, win_y) = (self.geom.win_x as f32, self.geom.win_y as f32);
                         let liquid_interest = pager_backdrop.iter().flatten().fold(
                             surface_bounds,
@@ -466,6 +426,8 @@ impl App {
                         } else {
                             liquid_interest
                         };
+                        let liquid_active =
+                            self.config.island_style == "liquid" || self.lingosoul.needs_backdrop();
                         let backdrop_ready = super::system::update_backdrop_capture(
                             &mut self.backdrop_capture,
                             &mut renderer,
@@ -477,21 +439,61 @@ impl App {
                                 frost_sigma: self.config.liquid_glass_blur
                                     * liquid_scale
                                     * (1.0 - 0.85 * self.lingosoul.style().drop),
-                                active: self.config.island_style == "liquid"
-                                    || self.lingosoul.needs_backdrop(),
+                                active: liquid_active,
                                 animating: self.springs.any_animating()
                                     || self.lingosoul.is_animating(),
-                                visible_to_capture: self.config.liquid_glass_compat_capture,
                             },
                         );
-                        self.lingosoul.set_glass_ready(backdrop_ready);
+                        let island_style = if liquid_active && !backdrop_ready {
+                            "glass"
+                        } else {
+                            self.config.island_style.as_str()
+                        };
+                        let outline = secondary_task
+                            .filter(|_| {
+                                self.host_backdrop && matches!(island_style, "glass" | "dynamic")
+                            })
+                            .map(|_| {
+                                surface.outline.clip_segments(winisland_render::Point::new(
+                                    surface_bounds.left,
+                                    surface_bounds.top,
+                                ))
+                            });
+                        let host_backdrop = super::system::update_host_backdrop(
+                            &mut self.host_backdrop,
+                            win.id(),
+                            HostBackdropParams {
+                                enabled: matches!(island_style, "glass" | "dynamic"),
+                                screen_x: self.geom.win_x as f32 + surface_bounds.left,
+                                screen_y: self.geom.win_y as f32 + surface_bounds.top,
+                                width: surface_bounds.width(),
+                                height: surface_bounds.height(),
+                                radius: self.springs.r.value,
+                                outline,
+                                extras: if island_style == "liquid" {
+                                    [None, None]
+                                } else {
+                                    pager_backdrop
+                                },
+                                blur: if island_style == "glass" {
+                                    self.config.glass_blur * liquid_scale
+                                } else {
+                                    0.0
+                                },
+                            },
+                        );
+                        self.lingosoul.set_glass_ready(
+                            backdrop_ready
+                                || matches!(
+                                    self.backdrop_capture,
+                                    super::BackdropCaptureState::Failed(_)
+                                ),
+                        );
                         let main_target = renderer.main_target();
                         let render_result =
                             renderer.frame(main_target, |drawing_context, painter| {
-                                let liquid_backdrop = (self.config.island_style == "liquid"
-                                    || self.lingosoul.needs_backdrop())
-                                .then(|| drawing_context.backdrop())
-                                .flatten();
+                                let liquid_backdrop =
+                                    backdrop_ready.then(|| drawing_context.backdrop()).flatten();
                                 draw_island(
                                     drawing_context,
                                     painter,
@@ -548,7 +550,7 @@ impl App {
                                             lyric_side_gap: self.config.lyrics_side_gap,
                                         },
                                         style: crate::ui::island::StyleParams {
-                                            island_style: &self.config.island_style,
+                                            island_style,
                                             host_backdrop,
                                             liquid_backdrop,
                                             liquid_optics: crate::ui::island::LiquidOptics {

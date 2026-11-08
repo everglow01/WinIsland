@@ -1,10 +1,10 @@
-use std::cell::OnceCell;
+use std::time::{Duration, Instant};
 
 use skia_safe::{
-    AlphaType, BlendMode, ColorType, Data, FilterMode, ISize, Image, ImageInfo, MipmapMode, Paint,
-    Rect, RuntimeEffect, SamplingOptions, Surface, TileMode,
+    AlphaType, BlendMode, Color, ColorType, FilterMode, ISize, Image, ImageInfo, Matrix,
+    MipmapMode, Paint, Rect, SamplingOptions, Surface, TileMode,
     gpu::{self, DirectContext, SurfaceOrigin, d3d::TextureResourceInfo},
-    runtime_effect::ChildPtr,
+    image_filters,
 };
 use windows::Win32::{
     Foundation::{CloseHandle, GENERIC_ALL, HANDLE},
@@ -24,15 +24,10 @@ use winisland_platform::{BackdropCaptureFrame, BackdropShare};
 use crate::error::RenderResult;
 
 const SIZE_STEP: u32 = 64;
-const MIN_FROST_SCALE: f32 = 2.0;
+const MIN_FROST_SCALE: f32 = 1.0;
 const MAX_FROST_SCALE: f32 = 24.0;
 const MAX_WORK_SIGMA: f32 = 4.0;
 const MIN_WORK_SIGMA: f32 = 0.3;
-const MAX_WORK_SPAN: f32 = 12.0;
-
-thread_local! {
-    static FROST: OnceCell<Option<RuntimeEffect>> = const { OnceCell::new() };
-}
 
 struct OwnedHandle(HANDLE);
 
@@ -48,11 +43,13 @@ pub(crate) struct SharedBackdrop {
     read: Fence,
     width: u32,
     height: u32,
+    pixel_scale: u32,
     generation: u64,
     read_value: u64,
     frame: Option<BackdropCaptureFrame>,
+    received: Option<Instant>,
     frost_sigma: f32,
-    frost_surfaces: [Option<Surface>; 3],
+    frost_surfaces: [Option<Surface>; 2],
     frost_scale: f32,
     images: Option<(u64, u32, Image, Image)>,
     used: bool,
@@ -64,6 +61,7 @@ impl SharedBackdrop {
         width: u32,
         height: u32,
         generation: u64,
+        pixel_scale: u32,
     ) -> RenderResult<Self> {
         let width = width.max(1).div_ceil(SIZE_STEP) * SIZE_STEP;
         let height = height.max(1).div_ceil(SIZE_STEP) * SIZE_STEP;
@@ -115,9 +113,11 @@ impl SharedBackdrop {
             read,
             width,
             height,
+            pixel_scale,
             generation,
             read_value: 0,
             frame: None,
+            received: None,
             frost_sigma: 0.0,
             frost_surfaces: Default::default(),
             frost_scale: MIN_FROST_SCALE,
@@ -126,8 +126,9 @@ impl SharedBackdrop {
         })
     }
 
-    pub(crate) fn fits(&self, width: u32, height: u32) -> bool {
-        width <= self.width
+    pub(crate) fn fits(&self, width: u32, height: u32, pixel_scale: u32) -> bool {
+        pixel_scale == self.pixel_scale
+            && width <= self.width
             && height <= self.height
             && self.width - width < SIZE_STEP * 4
             && self.height - height < SIZE_STEP * 4
@@ -140,6 +141,7 @@ impl SharedBackdrop {
             read_fence: self.read.handle.0.0 as usize,
             width: self.width,
             height: self.height,
+            pixel_scale: self.pixel_scale,
             generation: self.generation,
         }
     }
@@ -154,10 +156,8 @@ impl SharedBackdrop {
         frame: Option<BackdropCaptureFrame>,
         frost_sigma: f32,
     ) -> RenderResult<()> {
-        self.frost_sigma = frost_sigma;
-        // A capture update can miss a frame (source moved, magnifier still catching up). The
-        // texture still holds the last copy, so keep drawing it rather than dropping the glass,
-        // which would show the island without its backdrop for that frame.
+        self.frost_sigma = frost_sigma / self.pixel_scale as f32;
+        // A missing update leaves the previous shared texture valid.
         let Some(frame) = frame else {
             return Ok(());
         };
@@ -170,7 +170,13 @@ impl SharedBackdrop {
                 .map_err(|error| format!("Backdrop fence wait failed: {error}"))?;
         }
         self.frame = Some(frame);
+        self.received = Some(Instant::now());
         Ok(())
+    }
+
+    pub(crate) fn ready(&self) -> bool {
+        self.received
+            .is_some_and(|at| at.elapsed() <= Duration::from_millis(500))
     }
 
     pub(crate) fn finish_frame(&mut self, queue: &ID3D12CommandQueue) -> RenderResult<()> {
@@ -193,7 +199,7 @@ impl SharedBackdrop {
             && *cached == serial
             && *key == sigma_key
         {
-            self.used = true;
+            self.used |= self.frost_sigma < MIN_WORK_SIGMA;
             return Some((sharp.clone(), blurred.clone()));
         }
         let info = TextureResourceInfo {
@@ -223,7 +229,7 @@ impl SharedBackdrop {
     }
 
     pub(crate) fn frost_scale(&self) -> f32 {
-        self.frost_scale
+        self.frost_scale * self.pixel_scale as f32
     }
 
     fn render_frost(&mut self, context: &mut DirectContext, sharp: &Image) -> Option<Image> {
@@ -232,14 +238,6 @@ impl SharedBackdrop {
             self.frost_scale = 1.0;
             return Some(sharp.clone());
         }
-        let effect = FROST.with(|cell| {
-            cell.get_or_init(|| {
-                RuntimeEffect::make_for_shader(include_str!("../../frost.sksl"), None)
-                    .map_err(|error| log::error!("Backdrop blur shader failed: {error}"))
-                    .ok()
-            })
-            .clone()
-        })?;
         let scale = (self.frost_sigma / MAX_WORK_SIGMA)
             .ceil()
             .clamp(MIN_FROST_SCALE, MAX_FROST_SCALE);
@@ -266,76 +264,35 @@ impl SharedBackdrop {
         }
         self.frost_scale = scale;
         let sigma = self.frost_sigma / scale;
-        let reduced = frost_pass(
-            context,
-            &effect,
-            sharp,
-            self.frost_surfaces[0].as_mut()?,
-            FrostPass::Reduce(scale),
-        )?;
+        let reduced_surface = self.frost_surfaces[0].as_mut()?;
+        let mut paint = Paint::default();
+        paint.set_blend_mode(BlendMode::Src);
+        paint.set_shader(sharp.to_shader(
+            (TileMode::Clamp, TileMode::Clamp),
+            SamplingOptions::new(FilterMode::Linear, MipmapMode::None),
+            &Matrix::scale((1.0 / scale, 1.0 / scale)),
+        )?);
+        reduced_surface
+            .canvas()
+            .draw_rect(Rect::from_wh(size.width as f32, size.height as f32), &paint);
+        paint.set_shader(None);
+        let reduced = reduced_surface.image_snapshot();
         if sigma < MIN_WORK_SIGMA {
             return Some(reduced);
         }
-        let horizontal = frost_pass(
-            context,
-            &effect,
-            &reduced,
-            self.frost_surfaces[1].as_mut()?,
-            FrostPass::Blur([1.0, 0.0], sigma),
-        )?;
-        drop(reduced);
-        frost_pass(
-            context,
-            &effect,
-            &horizontal,
-            self.frost_surfaces[2].as_mut()?,
-            FrostPass::Blur([0.0, 1.0], sigma),
-        )
+        let blurred = self.frost_surfaces[1].as_mut()?;
+        paint.set_image_filter(image_filters::blur(
+            (sigma, sigma),
+            TileMode::Clamp,
+            None,
+            None,
+        )?);
+        blurred.canvas().clear(Color::TRANSPARENT);
+        blurred
+            .canvas()
+            .draw_image(&reduced, (0.0, 0.0), Some(&paint));
+        Some(blurred.image_snapshot())
     }
-}
-
-enum FrostPass {
-    Reduce(f32),
-    Blur([f32; 2], f32),
-}
-
-fn frost_pass(
-    context: &mut DirectContext,
-    effect: &RuntimeEffect,
-    input: &Image,
-    target: &mut Surface,
-    pass: FrostPass,
-) -> Option<Image> {
-    let source = input.to_shader(
-        (TileMode::Clamp, TileMode::Clamp),
-        SamplingOptions::new(FilterMode::Linear, MipmapMode::None),
-        None,
-    )?;
-    let mut uniforms = vec![0_u8; effect.uniform_size()];
-    let mut set = |name: &str, values: &[f32]| {
-        if let Some(uniform) = effect.find_uniform(name) {
-            for (index, value) in values.iter().enumerate() {
-                let offset = uniform.offset() + index * 4;
-                uniforms[offset..offset + 4].copy_from_slice(&value.to_ne_bytes());
-            }
-        }
-    };
-    match pass {
-        FrostPass::Reduce(scale) => set("boxSize", &[scale]),
-        FrostPass::Blur(direction, sigma) => {
-            set("direction", &direction);
-            set("sigma", &[sigma]);
-            set("span", &[(sigma * 3.0).ceil().min(MAX_WORK_SPAN)]);
-        }
-    }
-    let shader = effect.make_shader(Data::new_copy(&uniforms), &[ChildPtr::from(source)], None)?;
-    let mut paint = Paint::default();
-    paint.set_shader(shader);
-    paint.set_blend_mode(BlendMode::Src);
-    let bounds = Rect::from_wh(target.width() as f32, target.height() as f32);
-    target.canvas().draw_rect(bounds, &paint);
-    context.flush_surface(target);
-    Some(target.image_snapshot())
 }
 
 impl Drop for OwnedHandle {

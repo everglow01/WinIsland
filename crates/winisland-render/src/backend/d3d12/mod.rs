@@ -114,8 +114,9 @@ impl D3DDevice {
         width: u32,
         height: u32,
         generation: u64,
+        pixel_scale: u32,
     ) -> RenderResult<SharedBackdrop> {
-        SharedBackdrop::new(&self.backend.device, width, height, generation)
+        SharedBackdrop::new(&self.backend.device, width, height, generation, pixel_scale)
     }
 
     pub(crate) fn queue(&self) -> &windows::Win32::Graphics::Direct3D12::ID3D12CommandQueue {

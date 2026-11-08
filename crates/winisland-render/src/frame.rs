@@ -278,16 +278,26 @@ impl Renderer {
     }
 
     /// Returns a shared texture covering at least `width` x `height` pixels for backdrop capture.
-    pub fn backdrop_share(&mut self, width: u32, height: u32) -> RenderResult<BackdropShare> {
+    pub fn backdrop_share(
+        &mut self,
+        width: u32,
+        height: u32,
+        pixel_scale: u32,
+    ) -> RenderResult<BackdropShare> {
         self.check_ready()?;
+        let pixel_scale = pixel_scale.clamp(1, 2);
+        let width = width.div_ceil(pixel_scale);
+        let height = height.div_ceil(pixel_scale);
         if let Some(backdrop) = &self.backdrop
-            && backdrop.fits(width, height)
+            && backdrop.fits(width, height, pixel_scale)
         {
             return Ok(backdrop.share());
         }
         self.release_backdrop();
         let generation = BACKDROP_GENERATION.fetch_add(1, Ordering::Relaxed);
-        let backdrop = self.device.create_backdrop(width, height, generation)?;
+        let backdrop = self
+            .device
+            .create_backdrop(width, height, generation, pixel_scale)?;
         let share = backdrop.share();
         self.backdrop = Some(backdrop);
         Ok(share)
@@ -295,6 +305,10 @@ impl Renderer {
 
     pub fn backdrop_read_value(&self) -> u64 {
         self.backdrop.as_ref().map_or(0, SharedBackdrop::read_value)
+    }
+
+    pub fn backdrop_ready(&self) -> bool {
+        self.backdrop.as_ref().is_some_and(SharedBackdrop::ready)
     }
 
     /// Makes the next frames sample `frame`; the GPU waits for the capture copy before reading.

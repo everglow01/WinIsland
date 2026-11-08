@@ -717,18 +717,28 @@ impl WindowSystem for WindowsWindowSystem {
         true
     }
 
-    fn start_backdrop_capture(
-        &self,
-        id: WindowId,
-        adapter_luid: u64,
-        visible_to_capture: bool,
-    ) -> Result<(), PlatformError> {
-        let window = get_window(id).ok_or(PlatformError::Unavailable("overlay window"))?;
-        let hwnd = window_hwnd(&window).ok_or(PlatformError::Unavailable("overlay handle"))?;
-        let capture = Rc::new(
-            BackdropCapture::new(HWND(hwnd as *mut _), adapter_luid, visible_to_capture)
-                .map_err(PlatformError::Backend)?,
-        );
+    fn start_backdrop_capture(&self, id: WindowId, adapter_luid: u64) -> Result<(), PlatformError> {
+        self.stop_backdrop_capture(id);
+        let windows = WINDOWS
+            .with(|windows| {
+                windows.borrow().get(&id).map(|record| {
+                    std::iter::once(record.window.clone())
+                        .chain(record.backdrop.clone())
+                        .chain(record.input.as_ref().map(|input| input.window.clone()))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .ok_or(PlatformError::Unavailable("overlay window"))?;
+        let handles = windows
+            .iter()
+            .map(|window| {
+                window_hwnd(window)
+                    .map(|hwnd| HWND(hwnd as *mut _))
+                    .ok_or(PlatformError::Unavailable("overlay handle"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let capture =
+            Rc::new(BackdropCapture::new(&handles, adapter_luid).map_err(PlatformError::Backend)?);
         WINDOWS.with(|windows| {
             if let Some(record) = windows.borrow_mut().get_mut(&id) {
                 record.backdrop_capture = Some(capture);

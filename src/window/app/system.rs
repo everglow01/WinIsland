@@ -736,7 +736,6 @@ pub(super) struct BackdropCaptureInput {
     pub(super) frost_sigma: f32,
     pub(super) active: bool,
     pub(super) animating: bool,
-    pub(super) visible_to_capture: bool,
 }
 
 pub(super) fn update_backdrop_capture(
@@ -754,26 +753,13 @@ pub(super) fn update_backdrop_capture(
         renderer.release_backdrop();
         return false;
     }
-    if let BackdropCaptureState::Running { visible } = *state
-        && visible != input.visible_to_capture
-    {
-        stop_backdrop_capture(state, input.window);
-    }
     match *state {
-        BackdropCaptureState::Running { .. } => {}
+        BackdropCaptureState::Running => {}
         BackdropCaptureState::Failed(at) if at.elapsed() < BACKDROP_CAPTURE_RETRY => {
             return false;
         }
-        _ => match window().start_backdrop_capture(
-            window_ref.id(),
-            renderer.adapter_luid(),
-            input.visible_to_capture,
-        ) {
-            Ok(()) => {
-                *state = BackdropCaptureState::Running {
-                    visible: input.visible_to_capture,
-                }
-            }
+        _ => match window().start_backdrop_capture(window_ref.id(), renderer.adapter_luid()) {
+            Ok(()) => *state = BackdropCaptureState::Running,
             Err(error) => {
                 log::warn!("Liquid glass backdrop capture is unavailable: {error}");
                 *state = BackdropCaptureState::Failed(Instant::now());
@@ -782,7 +768,8 @@ pub(super) fn update_backdrop_capture(
         },
     }
     let size = window_ref.inner_size();
-    let share = match renderer.backdrop_share(size.width, size.height) {
+    let pixel_scale = if input.frost_sigma >= 0.3 { 2 } else { 1 };
+    let share = match renderer.backdrop_share(size.width, size.height, pixel_scale) {
         Ok(share) => share,
         Err(error) => {
             log::warn!("Liquid glass backdrop texture is unavailable: {error}");
@@ -795,13 +782,7 @@ pub(super) fn update_backdrop_capture(
     let margin = (input.frost_sigma * 3.0).ceil();
     let interest = input.interest;
     let refresh_hz = (1_000_000_000 / input.frame_interval.as_nanos().max(1)) as u32;
-    let integrated =
-        crate::platform::display().gpu_profile() == winisland_platform::GpuProfile::Integrated;
-    let rate_limit = match (integrated, input.animating) {
-        (false, true) => 60,
-        (true, false) => 20,
-        _ => 30,
-    };
+    let rate_limit = if input.animating { 60 } else { 30 };
     let frame = window().update_backdrop_capture(
         window_ref.id(),
         BackdropCaptureRequest {
@@ -838,11 +819,11 @@ pub(super) fn update_backdrop_capture(
     renderer
         .set_backdrop_frame(frame, input.frost_sigma)
         .is_ok()
-        && frame.is_some()
+        && renderer.backdrop_ready()
 }
 
 fn stop_backdrop_capture(state: &mut BackdropCaptureState, window_ref: Option<WindowRef>) {
-    if !matches!(state, BackdropCaptureState::Running { .. }) {
+    if !matches!(state, BackdropCaptureState::Running) {
         return;
     }
     if let Some(window_ref) = window_ref {

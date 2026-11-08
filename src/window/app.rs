@@ -64,7 +64,7 @@ enum DragAxis {
 #[derive(Clone, Copy, PartialEq)]
 enum BackdropCaptureState {
     Stopped,
-    Running { visible: bool },
+    Running,
     Failed(Instant),
 }
 

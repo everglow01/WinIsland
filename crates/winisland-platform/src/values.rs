@@ -200,6 +200,7 @@ pub struct BackdropShare {
     pub read_fence: usize,
     pub width: u32,
     pub height: u32,
+    pub pixel_scale: u32,
     pub generation: u64,
 }
 
