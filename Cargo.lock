@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "WinIsland"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "base64 0.23.1",
  "cpal",
@@ -5604,14 +5604,14 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 
 [[package]]
 name = "winisland-builtin-plugins"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "winisland-plugin-api",
 ]
 
 [[package]]
 name = "winisland-core"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "base64 0.23.1",
  "educe",
@@ -5631,7 +5631,7 @@ dependencies = [
 
 [[package]]
 name = "winisland-lingosoul"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "bzip2 0.6.1",
  "cpal",
@@ -5656,11 +5656,11 @@ dependencies = [
 
 [[package]]
 name = "winisland-platform"
-version = "2.0.0"
+version = "2.0.1"
 
 [[package]]
 name = "winisland-platform-windows"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "dirs",
  "image",
@@ -5694,7 +5694,7 @@ dependencies = [
 
 [[package]]
 name = "winisland-plugin-host"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "libloading 0.9.0",
  "log",
@@ -5727,7 +5727,7 @@ dependencies = [
 
 [[package]]
 name = "winisland-render"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "harfrust",
  "image",
@@ -5740,7 +5740,7 @@ dependencies = [
 
 [[package]]
 name = "winisland-utils"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "log",
  "parking_lot",
@@ -5749,7 +5749,7 @@ dependencies = [
 
 [[package]]
 name = "winisland-utils-derive"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
