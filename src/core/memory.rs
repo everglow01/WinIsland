@@ -4,15 +4,13 @@ use winisland_utils::poll::Cooldown;
 
 const RECLAIM_INTERVAL: Duration = Duration::from_secs(5);
 const IDLE_SETTLE: Duration = Duration::from_millis(500);
-const ACTIVE_FRAME_INTERVAL: Duration = Duration::from_millis(100);
+const MAX_RECLAIM_DEFERRAL: Duration = Duration::from_secs(1);
 
 #[derive(Default)]
 pub(crate) struct MemoryActivity {
     pub animating: bool,
     pub interacting: bool,
     pub resource_updates: bool,
-    pub playback: bool,
-    pub dynamic_background: bool,
 }
 
 #[derive(Default)]
@@ -20,8 +18,7 @@ pub(crate) struct MemoryReclaimer {
     cooldown: Cooldown,
     activity: MemoryActivity,
     idle_since: Option<Instant>,
-    last_frame: Option<Instant>,
-    rendering_until: Option<Instant>,
+    reclaim_pending_since: Option<Instant>,
     last_error: Option<String>,
 }
 
@@ -30,29 +27,26 @@ impl MemoryReclaimer {
         self.activity = activity;
     }
 
-    pub(crate) fn frame_presented(&mut self, now: Instant) {
-        if self.last_frame.replace(now).is_some_and(|previous| {
-            now.saturating_duration_since(previous) <= ACTIVE_FRAME_INTERVAL
-        }) {
-            self.rendering_until = Some(now + IDLE_SETTLE);
-        }
-    }
-
     pub(crate) fn update(&mut self, now: Instant, auxiliary_active: bool) {
         let idle = !auxiliary_active
             && !self.activity.animating
             && !self.activity.interacting
-            && !self.activity.resource_updates
-            && !self.activity.playback
-            && !self.activity.dynamic_background
-            && self.rendering_until.is_none_or(|until| now >= until);
-        if !idle {
+            && !self.activity.resource_updates;
+        if idle {
+            self.idle_since.get_or_insert(now);
+        } else {
             self.idle_since = None;
+        }
+        if !self.cooldown.is_ready(now) {
             return;
         }
-        let idle_since = *self.idle_since.get_or_insert(now);
-        if now.saturating_duration_since(idle_since) >= IDLE_SETTLE && self.cooldown.is_ready(now) {
+        let pending_since = *self.reclaim_pending_since.get_or_insert(now);
+        let settled = self
+            .idle_since
+            .is_some_and(|since| now.saturating_duration_since(since) >= IDLE_SETTLE);
+        if settled || now.saturating_duration_since(pending_since) >= MAX_RECLAIM_DEFERRAL {
             self.reclaim(now);
+            self.reclaim_pending_since = None;
         }
     }
 

@@ -1236,8 +1236,6 @@ impl App {
                 || self.plugin_ui.pressed_buttons != 0
                 || self.plugin_ui.touch_id.is_some(),
             resource_updates: resource_usage_active,
-            playback: playback_active,
-            dynamic_background: dynamic_effect_active,
         });
         self.precise_frame_pacing = transition_active
             || playback_active

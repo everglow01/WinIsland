@@ -620,8 +620,6 @@ impl App {
                         self.renderer = Some(renderer);
                         if let Err(error) = render_result {
                             self.invalidate_renderer(&error.to_string(), Instant::now());
-                        } else {
-                            self.memory.frame_presented(Instant::now());
                         }
                     }
                 }
