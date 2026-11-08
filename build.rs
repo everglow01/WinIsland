@@ -30,24 +30,8 @@ fn main() {
 
         let package = package_identity();
         let manifest = format!(
-            r#"
-<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity version="0.0.0.0" name="{}"/>
-  <msix xmlns="urn:schemas-microsoft-com:msix.v1"
-    publisher="CN=Eatgrapes.WinIsland"
-    packageName="{}"
-    applicationId="WinIsland"/>
-  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
-    <security>
-      <requestedPrivileges>
-        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
-      </requestedPrivileges>
-    </security>
-  </trustInfo>
-</assembly>
-"#,
-            package.name, package.name
+            include_str!("resources/WinIsland.manifest"),
+            package_name = package.name
         );
         res.set_manifest(&manifest);
         res.compile().unwrap();
