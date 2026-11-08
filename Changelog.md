@@ -11,9 +11,11 @@
 - Liquid Glass remains visible in screenshots, recordings and remote sessions. Improved black or frozen desktop backgrounds, with Frosted Glass used automatically when capture is unavailable
 - Fixed background flashes during expansion, blocky motion-blur artifacts, and animations stopping halfway while dragging the settings window
 - Added Fuzzy Lyric Search under Show Lyrics: allow similar titles, artists and other versions without rejecting results based on track duration
+- Added "Show title without lyrics": optionally show only the song title in the compact island when a track has no lyrics or lyric display is turned off
 - Improved local and secondary lyrics, including Bengali ligatures and word highlighting
 - The timer can be enabled or disabled from the Plugins page, and the clock widget follows the system's 12/24-hour format
 - Kept Simplified Chinese and English interface languages, and removed footage recording and its tray entry
+- Improved code quality and maintainability by splitting large frame and settings modules and sharing common helpers
 
 ### v2.0.0
 - Added LingoSoul, a voice and chat assistant on the island with a wake word, listening and thinking animations, reply cards, and a chat panel with Markdown and saved history
