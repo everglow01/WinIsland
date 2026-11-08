@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use winisland_core::config::{PluginWidgetSlot, WidgetSlot};
 use winisland_plugin_host::draw::replay::PreparedFrame;
 use winisland_plugin_host::host::PluginHost;
-use winisland_render::{BlurSpec, LayerSpec, Painter, Rgba, Vec2};
+use winisland_render::{BlurSpec, DrawingContext, Painter, Rgba, Vec2};
 
 pub(super) struct ExpandedContentParams<'a> {
     pub(super) painter: Painter<'a>,
@@ -41,7 +41,10 @@ pub(super) struct ExpandedContentParams<'a> {
     pub(super) plugin_host: Option<&'a PluginHost>,
 }
 
-pub(super) fn draw_expanded_content(params: ExpandedContentParams<'_>) -> bool {
+pub(super) fn draw_expanded_content(
+    context: &mut DrawingContext<'_>,
+    params: ExpandedContentParams<'_>,
+) -> bool {
     let ExpandedContentParams {
         painter,
         blur_filter,
@@ -74,13 +77,13 @@ pub(super) fn draw_expanded_content(params: ExpandedContentParams<'_>) -> bool {
         plugin_frames,
         plugin_host,
     } = params;
-    let mut widget_animating = false;
-    if expanded_alpha_f > 0.01 {
+    if expanded_alpha_f <= 0.01 {
+        return false;
+    }
+    let draw = |painter: Painter<'_>| {
+        let mut widget_animating = false;
         let alpha = (expanded_alpha_f * 255.0) as u8;
         painter.save();
-        if let Some(filter) = blur_filter {
-            painter.begin_layer(LayerSpec::Blur(filter));
-        }
 
         for (index, page) in pages.iter().enumerate() {
             let distance = index as f32 - view_offset;
@@ -165,10 +168,19 @@ pub(super) fn draw_expanded_content(params: ExpandedContentParams<'_>) -> bool {
             painter.restore();
         }
 
-        if blur_filter.is_some() {
-            painter.restore();
-        }
         painter.restore();
+        widget_animating
+    };
+    match blur_filter {
+        Some(filter) => context.with_motion_blur(
+            painter,
+            filter,
+            (
+                expanded_width * global_scale,
+                expanded_height * global_scale,
+            ),
+            draw,
+        ),
+        None => draw(painter),
     }
-    widget_animating
 }

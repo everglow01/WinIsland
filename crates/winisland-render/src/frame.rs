@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use skia_safe::{Color, ImageInfo, Paint, Rect, Surface, gpu, image_filters};
+use skia_safe::{AlphaType, Color, ColorType, ImageInfo, Paint, Rect, Surface, gpu, image_filters};
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -34,9 +34,77 @@ impl RendererOptions {
 pub struct DrawingContext<'a> {
     direct_context: &'a mut gpu::DirectContext,
     backdrop: Option<&'a mut SharedBackdrop>,
+    motion_layer: &'a mut Option<Surface>,
 }
 
 impl DrawingContext<'_> {
+    /// Draws motion-blurred content on a cleared surface before applying the destination clip.
+    pub fn with_motion_blur<T>(
+        &mut self,
+        painter: Painter<'_>,
+        blur: crate::BlurSpec,
+        reserve: (f32, f32),
+        draw: impl FnOnce(Painter<'_>) -> T,
+    ) -> T {
+        let Some(clip) = painter.canvas.device_clip_bounds() else {
+            return draw(painter);
+        };
+        let (sigma_x, sigma_y) = blur.sigma;
+        if !sigma_x.is_finite() || !sigma_y.is_finite() {
+            return draw(painter);
+        }
+        let pad_x = (sigma_x.max(0.0) * 3.0).ceil() + 1.0;
+        let pad_y = (sigma_y.max(0.0) * 3.0).ceil() + 1.0;
+        let left = clip.left as f32 - pad_x;
+        let top = clip.top as f32 - pad_y;
+        let width = ((clip.width() as f32).max(reserve.0 * 1.1) + pad_x * 2.0)
+            .ceil()
+            .max(1.0) as i32;
+        let height = ((clip.height() as f32).max(reserve.1 * 1.1) + pad_y * 2.0)
+            .ceil()
+            .max(1.0) as i32;
+        let width = width.saturating_add(63) / 64 * 64;
+        let height = height.saturating_add(63) / 64 * 64;
+        let replace = self.motion_layer.as_ref().is_none_or(|surface| {
+            surface.width() < width
+                || surface.height() < height
+                || surface.width() - width > 256
+                || surface.height() - height > 256
+        });
+        if replace {
+            let info = ImageInfo::new((width, height), ColorType::RGBAF16, AlphaType::Premul, None);
+            let Some(surface) = self.render_surface(&info) else {
+                return draw(painter);
+            };
+            *self.motion_layer = Some(surface);
+        }
+        let Some(surface) = self.motion_layer.as_mut() else {
+            return draw(painter);
+        };
+        let canvas = surface.canvas();
+        canvas.restore_to_count(1);
+        canvas.reset_matrix();
+        canvas.clear(Color::TRANSPARENT);
+        canvas.translate((-left, -top));
+        canvas.concat(&painter.canvas.local_to_device_as_3x3());
+        let result = draw(Painter { canvas });
+        canvas.restore_to_count(1);
+        // The snapshot carries its dependency into the window frame's submission.
+        let image = surface.image_snapshot();
+        let mut paint = Paint::default();
+        paint.set_image_filter(image_filters::blur(
+            (sigma_x, sigma_y),
+            blur.tile.map(crate::convert::to_skia_tile_mode),
+            None,
+            None,
+        ));
+        let saved = painter.canvas.save();
+        painter.canvas.reset_matrix();
+        painter.canvas.draw_image(&image, (left, top), Some(&paint));
+        painter.canvas.restore_to_count(saved);
+        result
+    }
+
     /// Returns the screen content captured beneath this frame's window, if any.
     pub fn backdrop(&mut self) -> Option<Backdrop> {
         let backdrop = self.backdrop.as_mut()?;
@@ -59,10 +127,16 @@ impl DrawingContext<'_> {
     }
 
     fn render_surface(&mut self, info: &ImageInfo) -> Option<Surface> {
+        // Keep byte-sized GPU effect targets in the swap chain's RGBA channel order.
+        let info = if info.color_type() == ColorType::BGRA8888 {
+            info.with_color_type(ColorType::RGBA8888)
+        } else {
+            info.clone()
+        };
         gpu::surfaces::render_target(
             self.direct_context,
             gpu::Budgeted::Yes,
-            info,
+            &info,
             None,
             Some(gpu::SurfaceOrigin::TopLeft),
             None,
@@ -134,6 +208,7 @@ pub struct Renderer {
     next_target_id: u64,
     failure: Option<String>,
     backdrop: Option<SharedBackdrop>,
+    motion_layer: Option<Surface>,
 }
 
 impl Renderer {
@@ -148,6 +223,7 @@ impl Renderer {
             next_target_id: 1,
             failure: None,
             backdrop: None,
+            motion_layer: None,
         })
     }
 
@@ -169,9 +245,11 @@ impl Renderer {
 
     fn prewarm_expansion_effects(device: &mut D3DDevice) {
         let info = ImageInfo::new_n32_premul((96, 96), None);
+        let mut motion_layer = None;
         let mut drawing_context = DrawingContext {
             direct_context: &mut device.context,
             backdrop: None,
+            motion_layer: &mut motion_layer,
         };
         let Some(mut surface) = drawing_context.render_surface(&info) else {
             return;
@@ -270,6 +348,7 @@ impl Renderer {
             &mut DrawingContext {
                 direct_context: &mut self.device.context,
                 backdrop: self.backdrop.as_mut(),
+                motion_layer: &mut self.motion_layer,
             },
             Painter {
                 canvas: surface.canvas(),
@@ -355,5 +434,7 @@ impl Drop for Renderer {
             self.device.context.abandon();
         }
         self.targets.clear();
+        self.motion_layer = None;
+        self.backdrop = None;
     }
 }

@@ -488,7 +488,12 @@ impl App {
                         let main_target = renderer.main_target();
                         let render_result =
                             renderer.frame(main_target, |drawing_context, painter| {
+                                let liquid_backdrop = (self.config.island_style == "liquid"
+                                    || self.lingosoul.needs_backdrop())
+                                .then(|| drawing_context.backdrop())
+                                .flatten();
                                 draw_island(
+                                    drawing_context,
                                     painter,
                                     crate::ui::island::DrawIslandParams {
                                         layout: crate::ui::island::LayoutParams {
@@ -545,10 +550,7 @@ impl App {
                                         style: crate::ui::island::StyleParams {
                                             island_style: &self.config.island_style,
                                             host_backdrop,
-                                            liquid_backdrop: (self.config.island_style == "liquid"
-                                                || self.lingosoul.needs_backdrop())
-                                            .then(|| drawing_context.backdrop())
-                                            .flatten(),
+                                            liquid_backdrop,
                                             liquid_optics: crate::ui::island::LiquidOptics {
                                                 refraction: self.config.liquid_glass_refraction
                                                     / 100.0,

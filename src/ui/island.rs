@@ -30,8 +30,8 @@ use winisland_plugin_host::draw::replay::PreparedFrame;
 use winisland_plugin_host::host::PluginHost;
 use winisland_render::text::FontManager;
 use winisland_render::{
-    Backdrop, BlurSpec, FontWeight, GradientStop, Image, LiquidMaterial, LiquidShape, Painter,
-    Path, Point, RasterSurface, Rect, Rgba, TileMode, Vec2,
+    Backdrop, BlurSpec, DrawingContext, FontWeight, GradientStop, Image, LiquidMaterial,
+    LiquidShape, Painter, Path, Point, RasterSurface, Rect, Rgba, TileMode, Vec2,
 };
 
 pub struct LayoutParams {
@@ -188,7 +188,11 @@ pub fn expanded_content_alpha(
     }
 }
 
-pub fn draw_island(painter: Painter<'_>, params: DrawIslandParams<'_>) -> bool {
+pub fn draw_island(
+    context: &mut DrawingContext<'_>,
+    painter: Painter<'_>,
+    params: DrawIslandParams<'_>,
+) -> bool {
     let layout = &params.layout;
     let rect = Rect::from_xywh(
         layout.island_x,
@@ -212,12 +216,12 @@ pub fn draw_island(painter: Painter<'_>, params: DrawIslandParams<'_>) -> bool {
         Some(backdrop)
             if params.style.island_style == LIQUID_STYLE || params.style.lingosoul.drop > 0.0 =>
         {
-            draw_liquid_island(painter, &params, rect, blur_filter, backdrop)
+            draw_liquid_island(context, painter, &params, rect, blur_filter, backdrop)
         }
         _ => {
             draw_expanded_shadow(painter, &params, island_path);
             draw_background_layer(painter, &params, rect, &params.surface.outline);
-            draw_island_content(painter, &params, rect, blur_filter)
+            draw_island_content(context, painter, &params, rect, blur_filter)
         }
     };
     if params.style.lingosoul.warmup
@@ -358,6 +362,7 @@ fn draw_background_layer(
 }
 
 fn draw_expanded_layer(
+    context: &mut DrawingContext<'_>,
     painter: Painter<'_>,
     blur_filter: Option<BlurSpec>,
     params: &DrawIslandParams<'_>,
@@ -368,38 +373,41 @@ fn draw_expanded_layer(
     let layout = &params.layout;
     let media = &params.media;
     let style = &params.style;
-    draw_expanded_content(ExpandedContentParams {
-        painter,
-        blur_filter,
-        expanded_alpha: alpha,
-        pages: style.pages,
-        view_offset: layout.view_offset,
-        current_w: layout.current_w,
-        offset_x: layout.island_x,
-        offset_y: layout.island_y,
-        current_h: layout.current_h,
-        media: media.media,
-        music_active: media.music_active,
-        available_controls: media.available_controls,
-        global_scale: layout.expanded_scale,
-        expansion_progress: layout.expansion_progress,
-        viz_h_scale: visualizer_height_scale,
-        use_blur: style.use_blur,
-        font_size: style.font_size,
-        music_text_y_offset: style.music_text_y_offset,
-        music_text_line_spacing: style.music_text_line_spacing,
-        dt: style.dt,
-        expanded_width: style.expanded_width,
-        expanded_height: style.expanded_height,
-        text_color: Rgba::WHITE,
-        text_color_sec: Rgba::WHITE,
-        spectrum_fill,
-        widget_layout: style.widget_layout,
-        plugin_widget_layout: style.plugin_widget_layout,
-        plugin_widgets: style.plugin_widgets,
-        plugin_frames: style.plugin_frames,
-        plugin_host: style.plugin_host,
-    })
+    draw_expanded_content(
+        context,
+        ExpandedContentParams {
+            painter,
+            blur_filter,
+            expanded_alpha: alpha,
+            pages: style.pages,
+            view_offset: layout.view_offset,
+            current_w: layout.current_w,
+            offset_x: layout.island_x,
+            offset_y: layout.island_y,
+            current_h: layout.current_h,
+            media: media.media,
+            music_active: media.music_active,
+            available_controls: media.available_controls,
+            global_scale: layout.expanded_scale,
+            expansion_progress: layout.expansion_progress,
+            viz_h_scale: visualizer_height_scale,
+            use_blur: style.use_blur,
+            font_size: style.font_size,
+            music_text_y_offset: style.music_text_y_offset,
+            music_text_line_spacing: style.music_text_line_spacing,
+            dt: style.dt,
+            expanded_width: style.expanded_width,
+            expanded_height: style.expanded_height,
+            text_color: Rgba::WHITE,
+            text_color_sec: Rgba::WHITE,
+            spectrum_fill,
+            widget_layout: style.widget_layout,
+            plugin_widget_layout: style.plugin_widget_layout,
+            plugin_widgets: style.plugin_widgets,
+            plugin_frames: style.plugin_frames,
+            plugin_host: style.plugin_host,
+        },
+    )
 }
 
 fn draw_compact_layer(
@@ -545,6 +553,7 @@ fn draw_island_border(painter: Painter<'_>, params: &DrawIslandParams<'_>) {
 }
 
 fn draw_liquid_island(
+    context: &mut DrawingContext<'_>,
     painter: Painter<'_>,
     params: &DrawIslandParams<'_>,
     rect: Rect,
@@ -576,10 +585,11 @@ fn draw_liquid_island(
     if !painter.draw_liquid_glass(backdrop, &shape, &material, 1.0, 1.0) {
         draw_background_layer(painter, params, rect, &params.surface.outline);
     }
-    draw_island_content(painter, params, rect, blur_filter)
+    draw_island_content(context, painter, params, rect, blur_filter)
 }
 
 fn draw_island_content(
+    context: &mut DrawingContext<'_>,
     painter: Painter<'_>,
     params: &DrawIslandParams<'_>,
     rect: Rect,
@@ -626,6 +636,7 @@ fn draw_island_content(
     let visualizer_height_scale = COLLAPSED_VISUALIZER_HEIGHT_SCALE
         + (1.0 - COLLAPSED_VISUALIZER_HEIGHT_SCALE) * layout.expansion_progress;
     let widget_animating = draw_expanded_layer(
+        context,
         painter,
         blur_filter,
         params,
