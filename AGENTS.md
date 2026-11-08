@@ -50,12 +50,12 @@ The island sits in the user's shell for hours at a time, next to whatever they a
 
 When it is an extension:
 
-1. Create `crates/winisland-plugin-<name>/` with its own `Cargo.toml` that depends only on `winisland-plugin-api`.
+1. Add a module under `crates/winisland-builtin-plugins/src/`. Built-in plugins share this crate and depend only on `winisland-plugin-api`.
 2. Implement the ABI v2 entry point and expose `descriptor()`.
-3. Add the crate to the workspace `members` in the root `Cargo.toml`, register it in `builtin_plugins()` in `src/plugin/mod.rs`, and add its translation keys.
+3. Register it in `builtin_plugins()` in `crates/winisland-builtin-plugins/src/lib.rs` and add its translation keys.
 4. Draw, take input, and persist through the plugin services. Do not reach into `src/`.
 
-`crates/winisland-plugin-calendar/` is the reference: `default-features = false` plus the `sdk` feature, an exported `descriptor()`, and an entry in `builtin_plugins()`. See [.agents/ARCHITECTURE.md](.agents/ARCHITECTURE.md#plugin-system) and [Page/plugin-dev.md](Page/plugin-dev.md).
+`crates/winisland-builtin-plugins/src/calendar/` is the reference: the shared crate uses `default-features = false` plus the `sdk` feature, and each plugin exposes `descriptor()` and has an entry in `builtin_plugins()`. See [.agents/ARCHITECTURE.md](.agents/ARCHITECTURE.md#plugin-system) and [Page/plugin-dev.md](Page/plugin-dev.md).
 
 If an extension cannot be expressed through the plugin ABI, name the missing host capability and propose adding it to the ABI. Do not route around the seam by writing it into `src/`.
 

@@ -1,4 +1,3 @@
-mod geometry;
 mod locale;
 
 use std::cell::RefCell;
@@ -13,7 +12,8 @@ use winisland_plugin_api::sdk::{
 };
 use winisland_plugin_api::*;
 
-use self::geometry::{Point, Rect, Vec2};
+use crate::geometry::{Point, Rect, Vec2};
+
 use self::locale::{Holiday, Region, days_in_month, weekday};
 
 const ACCENT: Rgba = Rgba::from_argb(0xffff_453a);

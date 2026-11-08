@@ -1,7 +1,8 @@
 use std::time::{Duration, Instant};
 
 use crate::geometry::{Point, Rect};
-use crate::view::Rolling;
+
+use super::view::Rolling;
 
 pub(crate) const PRESETS: [u64; 6] = [1, 5, 10, 15, 25, 60];
 pub(crate) const DEFAULT_SECONDS: u64 = 5 * 60;
@@ -449,9 +450,9 @@ pub(crate) fn format_remaining(duration: Duration) -> String {
     }
 }
 
-pub(crate) fn duration_label(seconds: u64, text: &crate::locale::Text) -> String {
+pub(crate) fn duration_label(seconds: u64, text: &super::locale::Text) -> String {
     if seconds.is_multiple_of(60) {
-        crate::locale::fill(text.minutes, &(seconds / 60).to_string())
+        super::locale::fill(text.minutes, &(seconds / 60).to_string())
     } else {
         format_remaining(Duration::from_secs(seconds))
     }

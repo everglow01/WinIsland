@@ -1,4 +1,4 @@
-const ALARM_SVG: &str = include_str!("../../../resources/in_app/icons/alarm.fill.svg");
+const ALARM_SVG: &str = include_str!("../../../../resources/in_app/icons/alarm.fill.svg");
 
 pub(crate) struct Text {
     pub(crate) title: &'static str,

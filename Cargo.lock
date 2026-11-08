@@ -36,15 +36,14 @@ dependencies = [
  "wasapi",
  "windows",
  "windows-core",
+ "winisland-builtin-plugins",
  "winisland-core",
  "winisland-lingosoul",
  "winisland-platform",
  "winisland-platform-windows",
  "winisland-plugin-api",
- "winisland-plugin-calendar",
  "winisland-plugin-host",
  "winisland-plugin-package",
- "winisland-plugin-timer",
  "winisland-render",
  "winres",
  "zip 8.6.0",
@@ -5574,6 +5573,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 
 [[package]]
+name = "winisland-builtin-plugins"
+version = "2.0.0"
+dependencies = [
+ "winisland-plugin-api",
+]
+
+[[package]]
 name = "winisland-core"
 version = "2.0.0"
 dependencies = [
@@ -5657,13 +5663,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "winisland-plugin-calendar"
-version = "2.0.0"
-dependencies = [
- "winisland-plugin-api",
-]
-
-[[package]]
 name = "winisland-plugin-host"
 version = "2.0.0"
 dependencies = [
@@ -5694,13 +5693,6 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "zip 8.6.0",
-]
-
-[[package]]
-name = "winisland-plugin-timer"
-version = "2.0.0"
-dependencies = [
- "winisland-plugin-api",
 ]
 
 [[package]]

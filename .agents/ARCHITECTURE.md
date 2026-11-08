@@ -28,6 +28,7 @@ crates/
 │   ├── plugin_settings.rs Plugin settings page model
 │   └── widgets.rs     Plugin widget model (PluginWidget, WidgetManager)
 ├── winisland-plugin-api/  ABI v2 types, draw protocol, SDK, and optional packager
+├── winisland-builtin-plugins/  Built-in plugin registry, calendar and timer modules, and shared geometry; depends only on the plugin SDK
 ├── winisland-plugin-package/  Manifest, ZIP activation, signing, and marketplace catalog
 ├── winisland-plugin-host/  Per-instance service tables, loader, lifecycle, resource registry, draw validation and replay
 ├── winisland-render/      Rendering values, Painter, images, text, D3D12 targets, and frame lifecycle
@@ -241,7 +242,7 @@ Build requirements: Windows SDK, LLVM/clang (via Visual Studio or `choco install
 | `winisland-render` | `src/backend/**` only | Owns the D3D12 device, swap chains, and Skia GPU contexts |
 | `winisland-plugin-host` | `src/{abi,loader,services}/**`, `src/lifecycle*` | Implements the C ABI tables and the plugin loader |
 | `winisland-plugin-api` | `src/{abi,sdk}/**` | Declares the ABI types and wraps them for plugin authors |
-| `winisland-plugin-calendar` | `src/lib.rs` plugin entry only | Built-in plugin; its `extern "C"` entry points are the only FFI surface |
+| `winisland-builtin-plugins` | `src/{calendar,timer}/mod.rs` plugin entries only | Built-in plugins; their `extern "C"` entry points are the only FFI surfaces |
 | `winisland-core` | none | Domain layer; must compile without any platform dependency |
 | `winisland-platform` | none | Contracts and value types only; must stay free of `unsafe` |
 | `src/**` (application) | none | Application code calls the platform contract instead |
@@ -252,7 +253,7 @@ Rules that apply everywhere:
 2. Every `unsafe extern "C"` entry point validates its pointer arguments before dereferencing them and returns a `PluginStatus` instead of panicking.
 3. New `unsafe` outside the table above requires an architecture decision, not a code review comment.
 
-Two known violations are recorded rather than fixed: `src/window/settings/mod.rs` calls `EnumDisplayDevicesW` directly instead of going through `winisland-platform-windows`, and `winisland-plugin-calendar` keeps its `extern "C"` entry points in the crate root. Do not add more.
+A known violation is recorded rather than fixed: `src/window/settings/mod.rs` calls `EnumDisplayDevicesW` directly instead of going through `winisland-platform-windows`. Do not add more.
 
 ### Documentation rules
 

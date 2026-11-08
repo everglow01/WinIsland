@@ -1,5 +1,5 @@
 [package]
-name = "winisland-plugin-calendar"
+name = "winisland-builtin-plugins"
 version.workspace = true
 edition = "2024"
 publish = false

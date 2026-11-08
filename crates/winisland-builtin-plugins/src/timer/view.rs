@@ -6,8 +6,9 @@ use winisland_plugin_api::sdk::{
 };
 
 use crate::geometry::{Point, Rect, Vec2};
-use crate::locale::Text;
-use crate::state::{
+
+use super::locale::Text;
+use super::state::{
     self, Action, Phase, PrimaryStyle, State, TimeField, advance, layout, presets_enabled,
     progress, remaining, ring_stroke, time_center, time_size,
 };
@@ -559,7 +560,7 @@ pub(crate) fn draw_page(
         &colors,
         base_color,
     );
-    let text = crate::locale::text(&state.language);
+    let text = super::locale::text(&state.language);
     let (caption, caption_color) = match frame.phase {
         Phase::Idle | Phase::Finished { .. } if frame.selected.is_some() => (
             text.fine_hint.to_owned(),
@@ -574,7 +575,7 @@ pub(crate) fn draw_page(
             with_alpha(text_color, 0.55 * opacity),
         ),
         Phase::Running { .. } => (
-            crate::locale::fill(text.ends_at, &state::end_time_text(left, clock)),
+            super::locale::fill(text.ends_at, &state::end_time_text(left, clock)),
             with_alpha(text_color, 0.55 * opacity),
         ),
         Phase::Paused { .. } => (text.pause.to_owned(), with_alpha(ORANGE, 0.85 * opacity)),
@@ -620,7 +621,7 @@ pub(crate) fn draw_page(
             )
         };
         view.fill_round_rect(*chip, chip.height() / 2.0, fill);
-        let label = crate::locale::fill(text.minutes, &state::PRESETS[index].to_string());
+        let label = super::locale::fill(text.minutes, &state::PRESETS[index].to_string());
         let label_size = fitted_size(
             view,
             &label,

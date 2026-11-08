@@ -1,4 +1,3 @@
-mod geometry;
 mod locale;
 mod state;
 mod view;
@@ -11,6 +10,8 @@ use winisland_plugin_api::sdk::{
     Activity, CallbackResource, Error, Event, Host, Resource, Rgba, Surface, TextStyle,
 };
 use winisland_plugin_api::*;
+
+use crate::geometry;
 
 use self::state::{Action, Phase, State};
 
