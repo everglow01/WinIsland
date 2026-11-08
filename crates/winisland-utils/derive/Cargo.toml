@@ -1,9 +1,9 @@
 [package]
-name = "settings-schema-derive"
-version = "0.1.0"
+name = "winisland-utils-derive"
+version.workspace = true
 edition = "2024"
 publish = false
-description = "Derive macro for settings-schema"
+description = "Derive macros for winisland-utils"
 license = "MIT"
 
 [lib]

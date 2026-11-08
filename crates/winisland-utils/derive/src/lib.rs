@@ -8,7 +8,7 @@ use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{Data, DeriveInput, Expr, Field, Fields, Ident, Lit, LitInt, LitStr, Token, Type};
 
-/// Derives `settings_schema::Settings` for a struct with named fields and generates a
+/// Derives `winisland_utils::settings::Settings` for a struct with named fields and generates a
 /// `<Struct>Field` enum with one variant per field marked `#[setting(..)]`. Each marked
 /// field takes exactly one kind and an optional label:
 ///
@@ -119,10 +119,10 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let get_arms = settings.iter().zip(&variants).map(|(setting, variant)| {
         let ident = setting.ident;
         let value = match setting.kind {
-            Kind::Toggle => quote!(::settings_schema::Value::Bool(self.#ident)),
-            Kind::Number(_) => quote!(::settings_schema::Value::Number(self.#ident as f64)),
+            Kind::Toggle => quote!(::winisland_utils::settings::Value::Bool(self.#ident)),
+            Kind::Number(_) => quote!(::winisland_utils::settings::Value::Number(self.#ident as f64)),
             Kind::Choice(_) => quote! {
-                ::settings_schema::Value::Text(::std::string::ToString::to_string(&self.#ident))
+                ::winisland_utils::settings::Value::Text(::std::string::ToString::to_string(&self.#ident))
             },
         };
         quote!(#field_enum::#variant => #value)
@@ -132,15 +132,15 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         let ty = setting.ty;
         match setting.kind {
             Kind::Toggle => quote! {
-                (#field_enum::#variant, ::settings_schema::Value::Bool(value)) => self.#ident = value
+                (#field_enum::#variant, ::winisland_utils::settings::Value::Bool(value)) => self.#ident = value
             },
             Kind::Number(_) => quote! {
-                (#field_enum::#variant, ::settings_schema::Value::Number(value)) => {
+                (#field_enum::#variant, ::winisland_utils::settings::Value::Number(value)) => {
                     self.#ident = value as #ty
                 }
             },
             Kind::Choice(_) => quote! {
-                (#field_enum::#variant, ::settings_schema::Value::Text(value)) => {
+                (#field_enum::#variant, ::winisland_utils::settings::Value::Text(value)) => {
                     match value.parse::<#ty>() {
                         ::core::result::Result::Ok(value) => self.#ident = value,
                         ::core::result::Result::Err(_) => return false,
@@ -156,23 +156,23 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
             #(#variants,)*
         }
 
-        impl #impl_generics ::settings_schema::Settings for #name #type_generics #where_clause {
+        impl #impl_generics ::winisland_utils::settings::Settings for #name #type_generics #where_clause {
             type Field = #field_enum;
 
             const FIELDS: &'static [#field_enum] = &[#(#field_enum::#variants),*];
 
-            fn schema(field: #field_enum) -> &'static ::settings_schema::Schema {
-                static SCHEMAS: [::settings_schema::Schema; #count] = [#(#schemas),*];
+            fn schema(field: #field_enum) -> &'static ::winisland_utils::settings::Schema {
+                static SCHEMAS: [::winisland_utils::settings::Schema; #count] = [#(#schemas),*];
                 &SCHEMAS[field as usize]
             }
 
-            fn get(&self, field: #field_enum) -> ::settings_schema::Value {
+            fn get(&self, field: #field_enum) -> ::winisland_utils::settings::Value {
                 match field {
                     #(#get_arms,)*
                 }
             }
 
-            fn set(&mut self, field: #field_enum, value: ::settings_schema::Value) -> bool {
+            fn set(&mut self, field: #field_enum, value: ::winisland_utils::settings::Value) -> bool {
                 let ::core::option::Option::Some(value) = Self::schema(field).kind.normalize(value)
                 else {
                     return false;
@@ -267,7 +267,7 @@ fn schema_tokens(setting: &Setting) -> TokenStream2 {
         .as_ref()
         .map_or_else(|| key.clone(), LitStr::value);
     let kind = match &setting.kind {
-        Kind::Toggle => quote!(::settings_schema::Kind::Toggle),
+        Kind::Toggle => quote!(::winisland_utils::settings::Kind::Toggle),
         Kind::Number(args) => {
             let bound = |value: &Option<Expr>, default: TokenStream2| {
                 value
@@ -282,7 +282,7 @@ fn schema_tokens(setting: &Setting) -> TokenStream2 {
                 .as_ref()
                 .map_or_else(|| quote!(0), |precision| quote!(#precision));
             quote! {
-                ::settings_schema::Kind::Number(::settings_schema::Number {
+                ::winisland_utils::settings::Kind::Number(::winisland_utils::settings::Number {
                     min: #min,
                     max: #max,
                     step: #step,
@@ -294,14 +294,14 @@ fn schema_tokens(setting: &Setting) -> TokenStream2 {
             let values = choices.iter().map(|choice| &choice.value);
             let labels = choices.iter().map(|choice| &choice.label);
             quote! {
-                ::settings_schema::Kind::Choice(&[
-                    #(::settings_schema::Choice { value: #values, label: #labels }),*
+                ::winisland_utils::settings::Kind::Choice(&[
+                    #(::winisland_utils::settings::Choice { value: #values, label: #labels }),*
                 ])
             }
         }
     };
     quote! {
-        ::settings_schema::Schema {
+        ::winisland_utils::settings::Schema {
             key: #key,
             label: #label,
             kind: #kind,

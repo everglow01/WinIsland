@@ -7,7 +7,6 @@ use crate::plugin::inventory::PluginManager;
 use crate::ui::compact::CompactOverlay;
 use crate::ui::expanded::pager::ExpandedPage;
 use crate::window::settings::SettingsApp;
-use pollkit::{Cooldown, Every, Job};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -25,6 +24,7 @@ use winisland_plugin_host::host::PluginHost;
 use winisland_plugin_package::manifest::PluginManifest;
 use winisland_plugin_package::marketplace::MarketplaceCatalog;
 use winisland_render::Renderer;
+use winisland_utils::poll::{Cooldown, Every, Job};
 
 mod activities;
 mod events;

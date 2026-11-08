@@ -1,9 +1,9 @@
 use std::time::{Duration, Instant};
 
-use pollkit::Every;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 use winisland_platform::{MediaCommand, MediaContext};
+use winisland_utils::poll::Every;
 
 use winisland_core::lyrics::LyricsMode;
 

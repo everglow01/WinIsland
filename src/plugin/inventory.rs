@@ -2,13 +2,13 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use pollkit::Job;
 use winisland_plugin_api::abi::ABI_VERSION_2;
 use winisland_plugin_host::fault::{disabled_plugin_ids, set_plugin_disabled};
 use winisland_plugin_host::loader::PluginLibrary;
 use winisland_plugin_package::activate::{
     MAX_PLUGIN_ICON_BYTES, MAX_PLUGIN_README_BYTES, read_bounded_file, read_manifest_file,
 };
+use winisland_utils::poll::Job;
 
 #[derive(Clone)]
 pub struct InstalledPlugin {

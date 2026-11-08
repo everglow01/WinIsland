@@ -5,7 +5,7 @@
 //! writes any field through [`Settings::get`] and [`Settings::set`] instead of carrying
 //! glue for every field. Nothing here draws or depends on a UI toolkit.
 
-pub use settings_schema_derive::Settings;
+pub use winisland_utils_derive::Settings;
 
 pub trait Settings {
     /// The generated `<Struct>Field` enum, with one variant per `#[setting]` field.

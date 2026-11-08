@@ -1,0 +1,12 @@
+[package]
+name = "winisland-utils"
+version.workspace = true
+edition = "2024"
+publish = false
+description = "Shared polling and settings utilities for WinIsland"
+license = "MIT"
+
+[dependencies]
+log = "0.4"
+parking_lot = "0.12"
+winisland-utils-derive = { path = "derive" }

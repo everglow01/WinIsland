@@ -6,7 +6,6 @@ use crate::utils::settings_ui::{
     SwitchAnimator, WidgetDropAnimation, WidgetEditorHover, WidgetEditorMode, WidgetEditorSlot,
     WidgetSource,
 };
-use pollkit::Job;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use winisland_core::anim::AnimPool;
@@ -20,6 +19,7 @@ use winisland_platform::{
 use winisland_plugin_host::host::PluginHost;
 use winisland_plugin_package::marketplace::{MarketplaceCatalog, MarketplacePlugin};
 use winisland_render::{Renderer, RendererTargetId};
+use winisland_utils::poll::Job;
 
 pub mod input;
 pub mod items;

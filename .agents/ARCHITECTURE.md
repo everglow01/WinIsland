@@ -17,6 +17,7 @@ WinIsland is a Windows desktop application that creates a Dynamic Island overlay
 
 ```
 crates/
+├── winisland-utils/   Shared polling jobs, cooldowns, and settings schemas; derive/ holds the companion proc-macro crate
 ├── winisland-core/    Platform-independent domain layer (no Windows API, no Skia, no winit, no UI)
 │   ├── config/        AppConfig, widget model, grid placement, version migration
 │   ├── context/       Plugin context manager

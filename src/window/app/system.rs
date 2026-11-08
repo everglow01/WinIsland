@@ -1,8 +1,8 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use pollkit::Job;
 use winisland_platform::{HostBackdropParams, TrayAction, WindowSize};
+use winisland_utils::poll::Job;
 
 use crate::core::persistence::{get_config_path, load_config};
 use crate::platform::{WindowRef, window};

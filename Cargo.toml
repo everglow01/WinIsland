@@ -5,9 +5,8 @@ edition = "2024"
 
 [workspace]
 members = [
-    "crates/pollkit",
-    "crates/settings-schema",
-    "crates/settings-schema-derive",
+    "crates/winisland-utils",
+    "crates/winisland-utils/derive",
     "crates/winisland-core",
     "crates/winisland-plugin-api",
     "crates/winisland-builtin-plugins",
@@ -60,8 +59,7 @@ winisland-render = { path = "crates/winisland-render" }
 winisland-platform = { path = "crates/winisland-platform" }
 winisland-platform-windows = { path = "crates/winisland-platform-windows" }
 winisland-lingosoul = { path = "crates/winisland-lingosoul", optional = true }
-pollkit = { path = "crates/pollkit" }
-settings-schema = { path = "crates/settings-schema" }
+winisland-utils = { path = "crates/winisland-utils" }
 zip = "8.6.0"
 serde_yaml = "0.9"
 pulldown-cmark = { version = "0.13.4", default-features = false }

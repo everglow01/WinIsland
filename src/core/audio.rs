@@ -1,12 +1,12 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample, SampleFormat, Stream, StreamConfig};
 use parking_lot::{Mutex, RwLock};
-use pollkit::Cooldown;
 use realfft::RealFftPlanner;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
+use winisland_utils::poll::Cooldown;
 
 const FFT_LEN: usize = 1024;
 const FFT_REFERENCE_SAMPLE_RATE: u32 = 48_000;

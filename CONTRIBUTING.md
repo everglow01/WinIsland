@@ -78,7 +78,7 @@ Application code under `src/**` must not depend on `winit`. Skia calls belong in
 
 **3.2.1 `unsafe`**: every `unsafe` block needs a `// SAFETY:` comment. New `unsafe` outside the crates listed in [.agents/ARCHITECTURE.md](.agents/ARCHITECTURE.md) requires an architecture decision before the PR is opened.
 
-**3.2.2 Async**: background work uses `pollkit::Job` for fire-and-forget tasks with a pollable result, or `tokio::spawn` for async work. Cross-thread communication with the window layer goes through the platform contract; application code does not touch the event loop directly.
+**3.2.2 Async**: background work uses `winisland_utils::poll::Job` for fire-and-forget tasks with a pollable result, or `tokio::spawn` for async work. Cross-thread communication with the window layer goes through the platform contract; application code does not touch the event loop directly.
 
 ### 3.3 Rendering and UI
 

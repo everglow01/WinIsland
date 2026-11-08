@@ -17,7 +17,6 @@ dependencies = [
  "log",
  "lrc",
  "parking_lot",
- "pollkit",
  "pulldown-cmark",
  "quick-xml",
  "realfft",
@@ -26,7 +25,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
- "settings-schema",
  "sha2 0.11.0",
  "thiserror 2.0.20",
  "tokio",
@@ -45,6 +43,7 @@ dependencies = [
  "winisland-plugin-host",
  "winisland-plugin-package",
  "winisland-render",
+ "winisland-utils",
  "winres",
  "zip 8.6.0",
 ]
@@ -3260,14 +3259,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pollkit"
-version = "0.1.0"
-dependencies = [
- "log",
- "parking_lot",
-]
-
-[[package]]
 name = "pollster"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4164,23 +4155,6 @@ dependencies = [
  "ryu",
  "serde",
  "unsafe-libyaml",
-]
-
-[[package]]
-name = "settings-schema"
-version = "0.1.0"
-dependencies = [
- "settings-schema-derive",
-]
-
-[[package]]
-name = "settings-schema-derive"
-version = "0.1.0"
-dependencies = [
- "heck 0.5.0",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
 ]
 
 [[package]]
@@ -5594,9 +5568,9 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "settings-schema",
  "strum",
  "toml 1.1.4+spec-1.1.0",
+ "winisland-utils",
 ]
 
 [[package]]
@@ -5637,7 +5611,6 @@ dependencies = [
  "libloading 0.9.0",
  "log",
  "parking_lot",
- "pollkit",
  "tokio",
  "tray-icon",
  "wasapi",
@@ -5647,6 +5620,7 @@ dependencies = [
  "windows-numerics",
  "windows-registry",
  "winisland-platform",
+ "winisland-utils",
  "winit",
 ]
 
@@ -5705,6 +5679,25 @@ dependencies = [
  "thiserror 2.0.20",
  "windows",
  "winisland-platform",
+]
+
+[[package]]
+name = "winisland-utils"
+version = "2.0.0"
+dependencies = [
+ "log",
+ "parking_lot",
+ "winisland-utils-derive",
+]
+
+[[package]]
+name = "winisland-utils-derive"
+version = "2.0.0"
+dependencies = [
+ "heck 0.5.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

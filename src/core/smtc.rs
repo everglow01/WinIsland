@@ -2,9 +2,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use pollkit::Job;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
+use winisland_utils::poll::Job;
 
 use winisland_core::config::AppConfig;
 use winisland_core::lyrics::{

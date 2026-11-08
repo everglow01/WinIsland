@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use pollkit::Cooldown;
+use winisland_utils::poll::Cooldown;
 
 const RECLAIM_INTERVAL: Duration = Duration::from_secs(5);
 const IDLE_SETTLE: Duration = Duration::from_millis(500);

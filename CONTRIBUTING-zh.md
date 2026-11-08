@@ -81,7 +81,7 @@ cargo clippy --workspace -- -D warnings
 
 **3.2.1 `unsafe`**：每个 `unsafe` 块都需要 `// SAFETY:` 注释。在 [.agents/ARCHITECTURE.md](.agents/ARCHITECTURE.md) 列出的 crate 之外新增 `unsafe`，需要在开 PR 之前先做架构决策。
 
-**3.2.2 异步**：后台任务使用 `pollkit::Job`（可轮询结果的即发即忘任务）或 `tokio::spawn`（异步任务）。与窗口层的跨线程通信通过平台契约进行，应用代码不直接接触事件循环。
+**3.2.2 异步**：后台任务使用 `winisland_utils::poll::Job`（可轮询结果的即发即忘任务）或 `tokio::spawn`（异步任务）。与窗口层的跨线程通信通过平台契约进行，应用代码不直接接触事件循环。
 
 ### 3.3 渲染与 UI
 

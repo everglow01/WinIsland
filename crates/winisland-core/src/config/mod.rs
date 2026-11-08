@@ -6,7 +6,7 @@ mod widgets;
 
 use educe::Educe;
 use serde::{Deserialize, Serialize};
-use settings_schema::Settings;
+use winisland_utils::settings::Settings;
 
 pub use lyrics::*;
 pub use migrate::*;

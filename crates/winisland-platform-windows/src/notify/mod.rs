@@ -11,7 +11,6 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use pollkit::Job;
 use windows::ApplicationModel::AppDisplayInfo;
 use windows::Foundation::Size;
 use windows::UI::Notifications::Management::{
@@ -19,6 +18,7 @@ use windows::UI::Notifications::Management::{
 };
 use windows::UI::Notifications::NotificationKinds;
 use windows::core::HRESULT;
+use winisland_utils::poll::Job;
 
 use self::events::{self as notification_event, NotificationEventSubscription};
 
