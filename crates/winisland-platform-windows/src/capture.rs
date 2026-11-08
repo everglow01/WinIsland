@@ -221,7 +221,7 @@ impl BackdropCapture {
             monitor: monitor.0 as isize,
             area,
             interest: request.interest,
-            rate_hz: request.max_rate_hz.clamp(1, 120),
+            rate_hz: request.max_rate_hz.clamp(1, 240),
             pixel_scale,
         };
         {

@@ -114,9 +114,9 @@ impl RenderTarget {
             .ok_or_else(|| RenderError::Backend("DXGI back buffer is unavailable".to_string()))
     }
 
-    pub(crate) fn present(&self) -> RenderResult<()> {
+    pub(crate) fn present(&self, sync_interval: u32) -> RenderResult<()> {
         // SAFETY: Renderer flushes the current surface with Present access and submits on this swap chain's queue.
-        unsafe { self.swap_chain.Present(1, DXGI_PRESENT(0)).ok() }
+        unsafe { self.swap_chain.Present(sync_interval, DXGI_PRESENT(0)).ok() }
             .map_err(|error| format!("DXGI presentation failed: {error}").into())
     }
 

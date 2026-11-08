@@ -783,8 +783,7 @@ pub(super) fn update_backdrop_capture(
     let (x, y) = input.origin;
     let margin = (input.frost_sigma * 3.0).ceil();
     let interest = input.interest;
-    let refresh_hz = (1_000_000_000 / input.frame_interval.as_nanos().max(1)) as u32;
-    let rate_limit = if input.animating { 60 } else { 30 };
+    let refresh_hz = 1_000_000_000_u128.div_ceil(input.frame_interval.as_nanos().max(1)) as u32;
     let frame = window().update_backdrop_capture(
         window_ref.id(),
         BackdropCaptureRequest {
@@ -797,7 +796,7 @@ pub(super) fn update_backdrop_capture(
                 bottom: y + (interest.bottom + margin).ceil() as i32,
             },
             read_value: renderer.backdrop_read_value(),
-            max_rate_hz: refresh_hz.clamp(1, rate_limit),
+            max_rate_hz: refresh_hz.clamp(1, 240),
         },
     );
     if frame.is_none() {

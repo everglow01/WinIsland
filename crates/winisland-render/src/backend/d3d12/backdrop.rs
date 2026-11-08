@@ -28,6 +28,7 @@ const MIN_FROST_SCALE: f32 = 1.0;
 const MAX_FROST_SCALE: f32 = 24.0;
 const MAX_WORK_SIGMA: f32 = 4.0;
 const MIN_WORK_SIGMA: f32 = 0.3;
+const CAPTURE_RECOVERY_GRACE: Duration = Duration::from_secs(3);
 
 struct OwnedHandle(HANDLE);
 
@@ -48,6 +49,8 @@ pub(crate) struct SharedBackdrop {
     read_value: u64,
     frame: Option<BackdropCaptureFrame>,
     received: Option<Instant>,
+    submitted: Option<u64>,
+    next_report: Instant,
     frost_sigma: f32,
     frost_surfaces: [Option<Surface>; 2],
     frost_filter: Option<(u32, ImageFilter)>,
@@ -119,6 +122,8 @@ impl SharedBackdrop {
             read_value: 0,
             frame: None,
             received: None,
+            submitted: None,
+            next_report: Instant::now(),
             frost_sigma: 0.0,
             frost_surfaces: Default::default(),
             frost_filter: None,
@@ -178,7 +183,26 @@ impl SharedBackdrop {
 
     pub(crate) fn ready(&self) -> bool {
         self.received
-            .is_some_and(|at| at.elapsed() <= Duration::from_millis(500))
+            .is_some_and(|at| at.elapsed() <= CAPTURE_RECOVERY_GRACE)
+    }
+
+    pub(crate) fn report_latency(&mut self) {
+        let Some(frame) = self.frame else {
+            return;
+        };
+        if self.submitted.replace(frame.serial) == Some(frame.serial) {
+            return;
+        }
+        let now = Instant::now();
+        if now >= self.next_report
+            && let Some(captured) = frame.captured_at
+        {
+            log::debug!(
+                "Liquid glass capture-to-present submission: {:.1} ms",
+                now.saturating_duration_since(captured).as_secs_f64() * 1000.0
+            );
+            self.next_report = now + Duration::from_secs(10);
+        }
     }
 
     pub(crate) fn finish_frame(&mut self, queue: &ID3D12CommandQueue) -> RenderResult<()> {
