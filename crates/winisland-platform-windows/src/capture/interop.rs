@@ -336,6 +336,9 @@ impl Desktop {
     }
 
     pub(super) fn set_excluded(&mut self, excluded: Vec<HWND>) -> Result<()> {
+        if self.excluded == excluded {
+            return Ok(());
+        }
         self.excluded = excluded;
         self.refresh()
     }

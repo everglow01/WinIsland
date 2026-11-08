@@ -1,23 +1,30 @@
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use windows::UI::Composition::Visual;
-use windows::Win32::Foundation::{COLORREF, E_FAIL, E_INVALIDARG, POINT};
+use windows::Foundation::Size;
+use windows::Graphics::DirectX::{DirectXAlphaMode, DirectXPixelFormat};
+use windows::UI::Composition::{CompositionGraphicsDevice, CompositionSurfaceBrush, SpriteVisual};
+use windows::Win32::Foundation::{COLORREF, E_FAIL, E_INVALIDARG, GENERIC_READ, POINT};
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
+    D2D_RECT_F, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_ALIASED, D2D1_BITMAP_BRUSH_PROPERTIES1, D2D1_BITMAP_PROPERTIES1,
     D2D1_BRUSH_PROPERTIES, D2D1_EXTEND_MODE_WRAP, D2D1_INTERPOLATION_MODE_LINEAR, ID2D1Bitmap1,
     ID2D1DeviceContext,
 };
-use windows::Win32::Graphics::DirectComposition::{
-    IDCompositionSurfaceFactory, IDCompositionVisual2,
+use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
+use windows::Win32::Graphics::Imaging::{
+    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICBitmapSource, IWICImagingFactory,
+    IWICPalette, WICBitmapDitherTypeNone, WICBitmapInterpolationModeFant,
+    WICBitmapPaletteTypeCustom, WICDecodeMetadataCacheOnLoad,
 };
-use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM,
+use windows::Win32::System::Com::{
+    CLSCTX_ALL, CLSCTX_INPROC_SERVER, CoCreateInstance, CoTaskMemFree,
 };
-use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, CoTaskMemFree};
+use windows::Win32::System::WinRT::Composition::{
+    ICompositionDrawingSurfaceInterop, ICompositorInterop,
+};
 use windows::Win32::UI::Shell::{
     DESKTOP_WALLPAPER_POSITION, DWPOS_CENTER, DWPOS_FIT, DWPOS_SPAN, DWPOS_STRETCH, DWPOS_TILE,
     DesktopWallpaper, IDesktopWallpaper,
@@ -32,8 +39,9 @@ use super::rect_size;
 const MAX_IMAGE_EDGE: u32 = 2048;
 
 pub(super) struct Wallpaper {
-    pub(super) visual: IDCompositionVisual2,
-    surfaces: IDCompositionSurfaceFactory,
+    pub(super) visual: SpriteVisual,
+    brush: CompositionSurfaceBrush,
+    surfaces: CompositionGraphicsDevice,
     service: IDesktopWallpaper,
     settings: Option<Settings>,
     image: Option<WallpaperImage>,
@@ -57,24 +65,30 @@ struct WallpaperImage {
 
 impl Wallpaper {
     pub(super) fn new(composition: &Composition) -> Result<Self> {
+        let interop: ICompositorInterop = composition.compositor.cast()?;
         // SAFETY: The worker apartment is initialized; all interfaces remain on that worker.
-        let (visual, surfaces, service) = unsafe {
+        let (surfaces, service) = unsafe {
             (
-                composition.native.CreateVisual()?,
-                composition
-                    .native
-                    .CreateSurfaceFactory(&composition.drawing)?,
+                interop.CreateGraphicsDevice(&composition.drawing)?,
                 CoCreateInstance(&DesktopWallpaper, None, CLSCTX_ALL)?,
             )
         };
+        let visual = composition.compositor.CreateSpriteVisual()?;
+        let brush = composition.compositor.CreateSurfaceBrush()?;
+        visual.SetBrush(&brush)?;
         Ok(Self {
             visual,
+            brush,
             surfaces,
             service,
             settings: None,
             image: None,
             viewport: None,
         })
+    }
+
+    pub(super) fn ready(&self) -> bool {
+        self.viewport.is_some()
     }
 
     pub(super) fn refresh(&mut self, bounds: Rect, area: Rect, pixel_scale: u32) -> Result<()> {
@@ -101,18 +115,18 @@ impl Wallpaper {
         let (width, height) =
             rect_size(area).ok_or_else(|| Error::new(E_INVALIDARG, "Invalid wallpaper area"))?;
         let (width, height) = (width.div_ceil(pixel_scale), height.div_ceil(pixel_scale));
-        // SAFETY: The factory retains the D2D device; the surface is fully initialized below.
-        let surface = unsafe {
-            self.surfaces.CreateSurface(
-                width,
-                height,
-                DXGI_FORMAT_B8G8R8A8_UNORM,
-                DXGI_ALPHA_MODE_IGNORE,
-            )?
-        };
+        let surface = self.surfaces.CreateDrawingSurface(
+            Size {
+                Width: width as f32,
+                Height: height as f32,
+            },
+            DirectXPixelFormat::B8G8R8A8UIntNormalized,
+            DirectXAlphaMode::Premultiplied,
+        )?;
+        let drawing: ICompositionDrawingSurfaceInterop = surface.cast()?;
         let mut offset = POINT::default();
         // SAFETY: The surface and writable offset are live; EndDraw is called on every path.
-        let context: ID2D1DeviceContext = unsafe { surface.BeginDraw(None, &mut offset)? };
+        let context: ID2D1DeviceContext = unsafe { drawing.BeginDraw(None, &mut offset)? };
         // SAFETY: Clip to this surface's atlas allocation before clearing or drawing.
         unsafe {
             context.SetDpi(96.0, 96.0);
@@ -131,7 +145,12 @@ impl Wallpaper {
             if self.image.is_none() && !settings.path.as_os_str().is_empty() {
                 match WallpaperImage::load(&context, &settings.path) {
                     Ok(image) => self.image = Some(image),
-                    Err(error) => log::debug!("Wallpaper image is unavailable: {error}"),
+                    Err(error) => {
+                        return Err(Error::new(
+                            error.code(),
+                            format!("System wallpaper decode failed: {error}"),
+                        ));
+                    }
                 }
             }
             let color = settings.color.0;
@@ -153,16 +172,24 @@ impl Wallpaper {
         // SAFETY: This balances the successful surface BeginDraw, including drawing failures.
         let end = unsafe {
             context.PopAxisAlignedClip();
-            surface.EndDraw()
+            drawing.EndDraw()
         };
         result.and(end)?;
-        let visual: Visual = self.visual.cast()?;
-        visual.SetSize(Vector2 {
+        self.visual.SetSize(Vector2 {
             X: width as f32,
             Y: height as f32,
         })?;
-        // SAFETY: The initialized surface belongs to the visual's device and is retained by it.
-        unsafe { self.visual.SetContent(&surface)? };
+        self.brush.SetSurface(&surface)?;
+        if self.viewport.is_none() {
+            log::info!(
+                "Liquid glass system wallpaper ready ({})",
+                if self.image.is_some() {
+                    "image"
+                } else {
+                    "solid color"
+                }
+            );
+        }
         self.viewport = Some((area, pixel_scale));
         Ok(())
     }
@@ -216,38 +243,64 @@ impl Settings {
 
 impl WallpaperImage {
     fn load(context: &ID2D1DeviceContext, path: &std::path::Path) -> Result<Self> {
-        let decode_error = |error: image::ImageError| Error::new(E_FAIL, error.to_string());
-        let decoded = image::ImageReader::open(path)
-            .map_err(|error| Error::new(E_FAIL, error.to_string()))?
-            .with_guessed_format()
-            .map_err(|error| Error::new(E_FAIL, error.to_string()))?
-            .decode()
-            .map_err(decode_error)?;
-        let (width, height) = (decoded.width() as f32, decoded.height() as f32);
-        // Only the bounded GPU image is retained; the full-resolution decode is released here.
-        let pixels = decoded
-            .thumbnail(MAX_IMAGE_EDGE, MAX_IMAGE_EDGE)
-            .into_rgba8();
         let properties = D2D1_BITMAP_PROPERTIES1 {
             pixelFormat: D2D1_PIXEL_FORMAT {
-                format: DXGI_FORMAT_R8G8B8A8_UNORM,
-                alphaMode: D2D1_ALPHA_MODE_IGNORE,
+                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
             },
             dpiX: 96.0,
             dpiY: 96.0,
             ..Default::default()
         };
-        // SAFETY: The checked, bounded RGBA buffer covers every row and is copied by CreateBitmap.
-        let bitmap = unsafe {
-            context.CreateBitmap(
-                D2D_SIZE_U {
-                    width: pixels.width(),
-                    height: pixels.height(),
-                },
-                Some(pixels.as_ptr().cast()),
-                pixels.width() * 4,
-                &properties,
-            )?
+        // SAFETY: COM is initialized on this worker. WIC owns its decoding buffers, bounds the
+        // scaled source, and converts to the D2D device's native premultiplied BGRA format.
+        let (bitmap, width, height) = unsafe {
+            let imaging: IWICImagingFactory =
+                CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
+            let decoder = imaging.CreateDecoderFromFilename(
+                &HSTRING::from(path.as_os_str()),
+                None,
+                GENERIC_READ,
+                WICDecodeMetadataCacheOnLoad,
+            )?;
+            let frame = decoder.GetFrame(0)?;
+            let (mut width, mut height) = (0, 0);
+            frame.GetSize(&mut width, &mut height)?;
+            if width == 0 || height == 0 {
+                return Err(Error::new(E_INVALIDARG, "Empty wallpaper image"));
+            }
+            let mut source: IWICBitmapSource = frame.cast()?;
+            let longest = width.max(height);
+            if longest > MAX_IMAGE_EDGE {
+                let scaled_width = (u64::from(width) * u64::from(MAX_IMAGE_EDGE)
+                    / u64::from(longest))
+                .max(1) as u32;
+                let scaled_height = (u64::from(height) * u64::from(MAX_IMAGE_EDGE)
+                    / u64::from(longest))
+                .max(1) as u32;
+                let scaler = imaging.CreateBitmapScaler()?;
+                scaler.Initialize(
+                    &source,
+                    scaled_width,
+                    scaled_height,
+                    WICBitmapInterpolationModeFant,
+                )?;
+                source = scaler.cast()?;
+            }
+            let converted = imaging.CreateFormatConverter()?;
+            converted.Initialize(
+                &source,
+                &GUID_WICPixelFormat32bppPBGRA,
+                WICBitmapDitherTypeNone,
+                None::<&IWICPalette>,
+                0.0,
+                WICBitmapPaletteTypeCustom,
+            )?;
+            (
+                context.CreateBitmapFromWicBitmap(&converted, Some(&properties))?,
+                width as f32,
+                height as f32,
+            )
         };
         Ok(Self {
             bitmap,

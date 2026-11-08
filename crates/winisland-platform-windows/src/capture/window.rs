@@ -18,10 +18,11 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, EnumChildWindows,
-    EnumWindows, GWL_EXSTYLE, GetClassNameW, GetParent, GetShellWindow, GetSystemMetrics,
-    GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, MSG, PM_REMOVE,
-    PeekMessageW, RegisterClassW, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SW_SHOWNOACTIVATE,
-    ShowWindow, TranslateMessage, WM_SETTINGCHANGE, WM_THEMECHANGED, WNDCLASSW, WS_EX_NOACTIVATE,
+    EnumWindows, GA_ROOT, GWL_EXSTYLE, GWL_STYLE, GetAncestor, GetClassNameW, GetParent,
+    GetShellWindow, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId,
+    IsIconic, IsWindowVisible, MSG, PM_REMOVE, PeekMessageW, RegisterClassW, SM_XVIRTUALSCREEN,
+    SM_YVIRTUALSCREEN, SW_SHOWNOACTIVATE, ShowWindow, TranslateMessage, WM_SETTINGCHANGE,
+    WM_THEMECHANGED, WNDCLASSW, WS_CHILD, WS_EX_LAYERED, WS_EX_NOACTIVATE,
     WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::{BOOL, Error, Interface, Result, w};
@@ -33,6 +34,7 @@ use super::wallpaper::Wallpaper;
 use super::{Graphics, intersection, rect_size};
 
 const DWM_TNP_ENABLE3D: u32 = 0x04000000;
+const WINDOW_STACK_INTERVAL: Duration = Duration::from_millis(50);
 
 thread_local! {
     static WALLPAPER_CHANGED: Cell<bool> = const { Cell::new(false) };
@@ -121,8 +123,9 @@ pub(super) struct Scene {
     wallpapers: WallpaperLayers,
     wallpaper: Option<Wallpaper>,
     excluded: Vec<HWND>,
-    windows: Vec<DesktopWindow>,
-    pending_windows: Vec<DesktopWindow>,
+    windows: Vec<HWND>,
+    pending_windows: Vec<HWND>,
+    stack_checked: Instant,
     refresh_error: Option<String>,
     checked: Instant,
     wallpaper_dirty: bool,
@@ -156,6 +159,8 @@ impl Scene {
         let composition = Composition::new(&graphics.device)?;
         let mut excluded: Vec<_> = excluded.iter().map(|&raw| HWND(raw as *mut _)).collect();
         excluded.push(host.0);
+        let mut windows = Vec::new();
+        window_stack(&excluded, &mut windows)?;
         let desktop_windows = desktop_windows()?;
         let mut desktop_excluded = excluded.clone();
         desktop_excluded.extend_from_slice(&desktop_windows.roots);
@@ -173,7 +178,8 @@ impl Scene {
         )?;
         // SAFETY: All visuals attached to this native wrapper belong to the same compositor.
         let wrapper = unsafe { composition.native.CreateVisual()? };
-        let wallpapers = WallpaperLayers::new(&composition, host.0, bounds, desktop_windows)?;
+        let wallpapers =
+            WallpaperLayers::new(&composition, host.0, bounds, desktop_windows, false)?;
         // SAFETY: The live desktop visual is placed above its wallpaper layers on the same device.
         unsafe {
             wrapper.AddVisual(&wallpapers.visual, false, None::<&IDCompositionVisual>)?;
@@ -218,8 +224,9 @@ impl Scene {
             wallpapers,
             wallpaper: None,
             excluded,
-            windows: Vec::new(),
+            windows,
             pending_windows: Vec::new(),
+            stack_checked: Instant::now(),
             refresh_error: None,
             checked: Instant::now(),
             wallpaper_dirty: true,
@@ -232,7 +239,7 @@ impl Scene {
         };
         scene.set_area(area, pixel_scale)?;
         if let Err(error) = scene.refresh_wallpaper() {
-            log::debug!("Initial wallpaper fallback is unavailable: {error}");
+            log::warn!("Initial wallpaper fallback is unavailable: {error}");
         }
         Ok(scene)
     }
@@ -263,7 +270,7 @@ impl Scene {
         if let Some(wallpaper) = &mut self.wallpaper
             && let Err(error) = wallpaper.set_area(area, pixel_scale)
         {
-            log::debug!("Wallpaper viewport update failed: {error}");
+            log::warn!("Wallpaper viewport update failed: {error}");
         }
         // SAFETY: The retained compositor owns the updated visual tree on this worker.
         unsafe { self.composition.native.Commit()? };
@@ -279,7 +286,7 @@ impl Scene {
                 Err(error) => {
                     let message = error.to_string();
                     if self.refresh_error.as_ref() != Some(&message) {
-                        log::debug!("Keeping the previous desktop background: {message}");
+                        log::warn!("Keeping the previous desktop background: {message}");
                         self.refresh_error = Some(message);
                     }
                 }
@@ -287,12 +294,16 @@ impl Scene {
             self.checked = Instant::now();
             self.wallpaper_dirty = false;
         }
-        visible_windows(self.area, &self.excluded, &mut self.pending_windows)?;
-        if self.windows != self.pending_windows {
-            self.desktop.refresh()?;
-            // SAFETY: Commit the complete window stack together, without resetting capture.
-            unsafe { self.composition.native.Commit()? };
-            std::mem::swap(&mut self.windows, &mut self.pending_windows);
+        if self.stack_checked.elapsed() >= WINDOW_STACK_INTERVAL {
+            window_stack(&self.excluded, &mut self.pending_windows)?;
+            if self.windows != self.pending_windows {
+                // DWM tracks live positions. Refresh only membership and stacking, not each move.
+                self.desktop.refresh()?;
+                // SAFETY: Commit the complete window stack together, without resetting capture.
+                unsafe { self.composition.native.Commit()? };
+                std::mem::swap(&mut self.windows, &mut self.pending_windows);
+            }
+            self.stack_checked = Instant::now();
         }
         Ok(())
     }
@@ -305,10 +316,9 @@ impl Scene {
         let background_result = (|| {
             if self.wallpaper.is_none() {
                 let wallpaper = Wallpaper::new(&self.composition)?;
-                let visual: Visual = wallpaper.visual.cast()?;
                 self.root
                     .Children()?
-                    .InsertAbove(&visual, &self.background)?;
+                    .InsertAbove(&wallpaper.visual, &self.background)?;
                 self.wallpaper = Some(wallpaper);
             }
             if (self.wallpaper_dirty || self.wallpaper_checked.elapsed() >= Duration::from_secs(30))
@@ -320,8 +330,17 @@ impl Scene {
             Ok(())
         })();
         let sources = desktop_windows()?;
-        if self.wallpapers.sources != sources {
-            let next = WallpaperLayers::new(&self.composition, self._host.0, self.bounds, sources)?;
+        let system_background = self.wallpaper.as_ref().is_some_and(Wallpaper::ready);
+        if self.wallpapers.sources != sources
+            || self.wallpapers.system_background != system_background
+        {
+            let next = WallpaperLayers::new(
+                &self.composition,
+                self._host.0,
+                self.bounds,
+                sources,
+                system_background,
+            )?;
             let mut excluded = self.excluded.clone();
             excluded.extend_from_slice(&next.sources.roots);
             self.desktop.set_excluded(excluded)?;
@@ -347,6 +366,7 @@ struct WallpaperLayers {
     visual: IDCompositionVisual2,
     _thumbnails: Vec<Thumbnail>,
     sources: DesktopSources,
+    system_background: bool,
 }
 
 impl WallpaperLayers {
@@ -355,26 +375,54 @@ impl WallpaperLayers {
         host: HWND,
         bounds: Rect,
         sources: DesktopSources,
+        system_background: bool,
     ) -> Result<Self> {
         // SAFETY: The visual is retained with its creating compositor.
         let visual = unsafe { composition.native.CreateVisual()? };
         let mut thumbnails = Vec::new();
+        let mut captured = Vec::new();
+        let mut unavailable = 0;
         for source in &sources.windows {
-            // SAFETY: These shell HWNDs were enumerated on this worker. A redirected shell
-            // surface is absent on raised desktops; their wallpaper children are captured separately.
-            let shell_without_bitmap = unsafe {
+            // SAFETY: Enumeration supplied the HWND; these calls only inspect window metadata.
+            let (shell, style, extended) = unsafe {
                 let mut process = 0;
                 GetWindowThreadProcessId(source.hwnd, Some(&mut process));
-                process == sources.process
-                    && GetWindowLongPtrW(source.hwnd, GWL_EXSTYLE) as u32
-                        & WS_EX_NOREDIRECTIONBITMAP.0
-                        != 0
+                (
+                    process == sources.process,
+                    GetWindowLongPtrW(source.hwnd, GWL_STYLE) as u32,
+                    GetWindowLongPtrW(source.hwnd, GWL_EXSTYLE) as u32,
+                )
             };
-            if shell_without_bitmap {
+            if shell && (system_background || extended & WS_EX_NOREDIRECTIONBITMAP.0 != 0) {
                 continue;
             }
-            let visible = intersection(bounds, source.bounds);
+            let mut capture_window = source.hwnd;
+            let mut capture_bounds = source.bounds;
+            if style & WS_CHILD.0 != 0 && extended & WS_EX_LAYERED.0 == 0 {
+                let mut rect = RECT::default();
+                // SAFETY: DWM shared thumbnails require a top-level or layered source. Capture
+                // the owning window and crop to the original wallpaper child's screen rectangle.
+                unsafe {
+                    capture_window = GetAncestor(source.hwnd, GA_ROOT);
+                    if capture_window.is_invalid()
+                        || GetWindowRect(capture_window, &mut rect).is_err()
+                    {
+                        unavailable += usize::from(!shell);
+                        continue;
+                    }
+                }
+                capture_bounds = Rect {
+                    left: rect.left,
+                    top: rect.top,
+                    right: rect.right,
+                    bottom: rect.bottom,
+                };
+            }
+            let visible = intersection(intersection(bounds, source.bounds), capture_bounds);
             if rect_size(visible).is_none() {
+                continue;
+            }
+            if captured.contains(&(capture_window, visible)) {
                 continue;
             }
             let relative = |origin: Rect| -> Result<RECT> {
@@ -397,28 +445,51 @@ impl WallpaperLayers {
                     | DWM_TNP_VISIBLE
                     | DWM_TNP_SOURCECLIENTAREAONLY
                     | DWM_TNP_ENABLE3D,
-                rcDestination: relative(bounds)?,
-                rcSource: relative(source.bounds)?,
+                rcDestination: relative(visible)?,
+                rcSource: relative(capture_bounds)?,
                 opacity: 255,
                 fVisible: true.into(),
                 fSourceClientAreaOnly: false.into(),
             };
-            match Thumbnail::window(host, source.hwnd, &composition.native, &properties) {
+            match Thumbnail::window(host, capture_window, &composition.native, &properties) {
                 Ok((thumbnail, wallpaper)) => {
-                    // SAFETY: The retained thumbnail and destination share this compositor.
-                    unsafe { visual.AddVisual(&wallpaper, false, None::<&IDCompositionVisual>)? };
+                    let destination = relative(bounds)?;
+                    // SAFETY: Shared thumbnail destinations start at zero; the owning visual
+                    // supplies screen placement without changing the thumbnail's source crop.
+                    unsafe {
+                        wallpaper.SetOffsetX2(destination.left as f32)?;
+                        wallpaper.SetOffsetY2(destination.top as f32)?;
+                        visual.AddVisual(&wallpaper, false, None::<&IDCompositionVisual>)?;
+                    }
                     thumbnails.push(thumbnail);
+                    captured.push((capture_window, visible));
+                    if system_background && !shell {
+                        log::info!(
+                            "Liquid glass live wallpaper source {:?}, capture window {:?}",
+                            source.hwnd,
+                            capture_window
+                        );
+                    }
                 }
-                Err(error) => log::debug!(
-                    "Desktop background layer {:?} is unavailable: {error}",
-                    source.hwnd
-                ),
+                Err(error) => {
+                    unavailable += usize::from(!shell);
+                    log::warn!(
+                        "Desktop background layer {:?} is unavailable: {error}",
+                        source.hwnd
+                    );
+                }
             }
+        }
+        if system_background && unavailable > 0 && thumbnails.is_empty() {
+            log::warn!(
+                "Live wallpaper windows have no capturable thumbnail surface ({unavailable} windows)"
+            );
         }
         Ok(Self {
             visual,
             _thumbnails: thumbnails,
             sources,
+            system_background,
         })
     }
 }
@@ -516,7 +587,7 @@ fn desktop_children(parent: HWND, shell_process: u32, windows: &mut Vec<DesktopW
     struct Children {
         parent: HWND,
         shell_process: u32,
-        windows: Vec<(DesktopWindow, bool)>,
+        windows: Vec<DesktopWindow>,
     }
     unsafe extern "system" fn collect(hwnd: HWND, parameter: LPARAM) -> BOOL {
         // SAFETY: EnumChildWindows invokes this synchronously with the live Children below.
@@ -525,7 +596,7 @@ fn desktop_children(parent: HWND, shell_process: u32, windows: &mut Vec<DesktopW
         let mut process = 0;
         let mut bounds = RECT::default();
         // SAFETY: HWND comes from enumeration; buffers are initialized and writable.
-        let worker = unsafe {
+        unsafe {
             if GetParent(hwnd).ok() != Some(children.parent) || !IsWindowVisible(hwnd).as_bool() {
                 return true.into();
             }
@@ -537,8 +608,7 @@ fn desktop_children(parent: HWND, shell_process: u32, windows: &mut Vec<DesktopW
             {
                 return true.into();
             }
-            worker
-        };
+        }
         let bounds = Rect {
             left: bounds.left,
             top: bounds.top,
@@ -546,9 +616,7 @@ fn desktop_children(parent: HWND, shell_process: u32, windows: &mut Vec<DesktopW
             bottom: bounds.bottom,
         };
         if rect_size(bounds).is_some() {
-            children
-                .windows
-                .push((DesktopWindow { hwnd, bounds }, worker));
+            children.windows.push(DesktopWindow { hwnd, bounds });
         }
         true.into()
     }
@@ -566,66 +634,50 @@ fn desktop_children(parent: HWND, shell_process: u32, windows: &mut Vec<DesktopW
             LPARAM((&mut children as *mut Children) as isize),
         )
     };
-    for (child, worker) in children.windows.into_iter().rev() {
+    for child in children.windows.into_iter().rev() {
         let hwnd = child.hwnd;
         windows.push(child);
-        if worker {
-            desktop_children(hwnd, shell_process, windows);
-        }
+        desktop_children(hwnd, shell_process, windows);
     }
 }
 
-fn visible_windows(area: Rect, excluded: &[HWND], windows: &mut Vec<DesktopWindow>) -> Result<()> {
+fn window_stack(excluded: &[HWND], windows: &mut Vec<HWND>) -> Result<()> {
     struct Enumeration<'a> {
-        area: Rect,
         excluded: &'a [HWND],
-        windows: &'a mut Vec<DesktopWindow>,
+        windows: &'a mut Vec<HWND>,
     }
     unsafe extern "system" fn collect(hwnd: HWND, parameter: LPARAM) -> BOOL {
         // SAFETY: EnumWindows invokes this synchronously while the enumeration and slice are live.
         let enumeration = unsafe { &mut *(parameter.0 as *mut Enumeration<'_>) };
-        let mut rect = RECT::default();
-        // SAFETY: HWND is supplied by EnumWindows and rect is a writable output.
+        // SAFETY: HWND is supplied by EnumWindows; these calls only query window state.
         unsafe {
             if enumeration.excluded.contains(&hwnd)
                 || !IsWindowVisible(hwnd).as_bool()
-                || GetWindowRect(hwnd, &mut rect).is_err()
+                || IsIconic(hwnd).as_bool()
             {
                 return true.into();
             }
         }
-        let bounds = Rect {
-            left: rect.left,
-            top: rect.top,
-            right: rect.right,
-            bottom: rect.bottom,
-        };
-        if rect_size(intersection(enumeration.area, bounds)).is_some() {
-            let mut cloaked = 0_u32;
-            // SAFETY: The output is correctly sized; a closed window is ignored by the next refresh.
-            if unsafe {
-                DwmGetWindowAttribute(
-                    hwnd,
-                    DWMWA_CLOAKED,
-                    (&mut cloaked as *mut u32).cast(),
-                    size_of::<u32>() as u32,
-                )
-            }
-            .is_ok()
-                && cloaked != 0
-            {
-                return true.into();
-            }
-            enumeration.windows.push(DesktopWindow { hwnd, bounds });
+        let mut cloaked = 0_u32;
+        // SAFETY: The output is correctly sized; a closed window is ignored by the next refresh.
+        if unsafe {
+            DwmGetWindowAttribute(
+                hwnd,
+                DWMWA_CLOAKED,
+                (&mut cloaked as *mut u32).cast(),
+                size_of::<u32>() as u32,
+            )
         }
+        .is_ok()
+            && cloaked != 0
+        {
+            return true.into();
+        }
+        enumeration.windows.push(hwnd);
         true.into()
     }
     windows.clear();
-    let mut enumeration = Enumeration {
-        area,
-        excluded,
-        windows,
-    };
+    let mut enumeration = Enumeration { excluded, windows };
     // SAFETY: All callback data remains live until synchronous enumeration returns.
     unsafe {
         EnumWindows(
