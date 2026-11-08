@@ -1,8 +1,8 @@
 use std::time::{Duration, Instant};
 
 use skia_safe::{
-    AlphaType, BlendMode, Color, ColorType, FilterMode, ISize, Image, ImageInfo, Matrix,
-    MipmapMode, Paint, Rect, SamplingOptions, Surface, TileMode,
+    AlphaType, BlendMode, Color, ColorType, FilterMode, ISize, Image, ImageFilter, ImageInfo,
+    Matrix, MipmapMode, Paint, Rect, SamplingOptions, Surface, TileMode,
     gpu::{self, DirectContext, SurfaceOrigin, d3d::TextureResourceInfo},
     image_filters,
 };
@@ -50,6 +50,7 @@ pub(crate) struct SharedBackdrop {
     received: Option<Instant>,
     frost_sigma: f32,
     frost_surfaces: [Option<Surface>; 2],
+    frost_filter: Option<(u32, ImageFilter)>,
     frost_scale: f32,
     images: Option<(u64, u32, Image, Image)>,
     used: bool,
@@ -120,6 +121,7 @@ impl SharedBackdrop {
             received: None,
             frost_sigma: 0.0,
             frost_surfaces: Default::default(),
+            frost_filter: None,
             frost_scale: MIN_FROST_SCALE,
             images: None,
             used: false,
@@ -235,6 +237,7 @@ impl SharedBackdrop {
     fn render_frost(&mut self, context: &mut DirectContext, sharp: &Image) -> Option<Image> {
         if self.frost_sigma < MIN_WORK_SIGMA {
             self.frost_surfaces = Default::default();
+            self.frost_filter = None;
             self.frost_scale = 1.0;
             return Some(sharp.clone());
         }
@@ -267,6 +270,7 @@ impl SharedBackdrop {
         let reduced_surface = self.frost_surfaces[0].as_mut()?;
         let mut paint = Paint::default();
         paint.set_blend_mode(BlendMode::Src);
+        // Keep native filter inputs in the renderer's RGBA channel order.
         paint.set_shader(sharp.to_shader(
             (TileMode::Clamp, TileMode::Clamp),
             SamplingOptions::new(FilterMode::Linear, MipmapMode::None),
@@ -280,13 +284,19 @@ impl SharedBackdrop {
         if sigma < MIN_WORK_SIGMA {
             return Some(reduced);
         }
+        let sigma_key = sigma.to_bits();
+        if self
+            .frost_filter
+            .as_ref()
+            .is_none_or(|(key, _)| *key != sigma_key)
+        {
+            self.frost_filter = Some((
+                sigma_key,
+                image_filters::blur((sigma, sigma), TileMode::Clamp, None, None)?,
+            ));
+        }
+        paint.set_image_filter(self.frost_filter.as_ref()?.1.clone());
         let blurred = self.frost_surfaces[1].as_mut()?;
-        paint.set_image_filter(image_filters::blur(
-            (sigma, sigma),
-            TileMode::Clamp,
-            None,
-            None,
-        )?);
         blurred.canvas().clear(Color::TRANSPARENT);
         blurred
             .canvas()

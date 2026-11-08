@@ -128,6 +128,7 @@ struct Latest {
 struct Control {
     request: Option<Request>,
     stopped: bool,
+    frame_arrived: bool,
 }
 
 #[derive(Default)]
@@ -139,6 +140,14 @@ struct Shared {
 }
 
 impl Shared {
+    fn notify_frame(&self) {
+        let mut control = self.control.lock();
+        if !control.frame_arrived {
+            control.frame_arrived = true;
+            self.changed.notify_one();
+        }
+    }
+
     fn wake(&self) {
         if !self.pending.swap(true, Ordering::AcqRel) {
             crate::window::wake();
