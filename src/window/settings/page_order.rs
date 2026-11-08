@@ -7,7 +7,8 @@ use winisland_render::FontWeight;
 use winisland_render::text::FontManager;
 use winisland_render::{Painter, Path, Point, Radius, Rect, Rgba, StrokeCap, StrokeJoin};
 
-use super::{SETTINGS_HEADER_H, SIDEBAR_W, SettingsApp, WIDGETS_PAGE_INDEX, animate_towards};
+use super::refresh::animate_towards;
+use super::{SETTINGS_HEADER_H, SIDEBAR_W, SettingsApp, WIDGETS_PAGE_INDEX};
 use crate::utils::color::SettingsTheme;
 use crate::utils::settings_ui::items::{
     CONTENT_PADDING, GROUP_INNER_PAD, GROUP_RADIUS, ROW_HEIGHT, SettingsItem,
