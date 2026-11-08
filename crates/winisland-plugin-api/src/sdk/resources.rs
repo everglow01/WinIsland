@@ -1,14 +1,15 @@
 use std::ffi::c_void;
 
 use super::{
-    ContextApi, Error, Host, HostStateApi, ImageApi, ImageHandle, LyricsApi, MediaApi, SettingsApi,
-    StoreApi, TextApi, copy_fixed, success,
+    ContextApi, Error, Host, HostStateApi, I18nApi, ImageApi, ImageHandle, LyricsApi, MediaApi,
+    SettingsApi, StoreApi, TextApi, copy_fixed, success,
 };
 use crate::abi::{
-    self, ContextApiV2, HostStateApiV2, ImageApiV2, LyricsTransformApiV2, MediaApiV2, PluginStatus,
-    SettingsApiV2, StoreApiV2, TextApiV2,
+    self, ContextApiV2, HostStateApiV2, I18nApiV2, ImageApiV2, LyricsTransformApiV2, MediaApiV2,
+    PluginStatus, SettingsApiV2, StoreApiV2, TextApiV2,
 };
 use crate::types::v2::context::{ContextDataV2, HostStateV2, MediaSourceDataV2};
+use crate::types::v2::i18n::TranslationPairV2;
 use crate::types::v2::lyrics::{
     LYRICS_TRANSFORMER_FLAG_SECONDARY, LyricsTextV2, LyricsTransformerDataV2,
 };
@@ -20,6 +21,7 @@ enum ResourceKind {
     Media,
     Lyrics,
     Settings,
+    I18n,
 }
 
 type Transform = dyn Fn(&str) -> String + Send + Sync;
@@ -91,6 +93,17 @@ impl Drop for Resource {
                         unsafe { release(table.prefix.context, self.host.token, self.id) }
                     })
                 }),
+            ResourceKind::I18n => {
+                self.host
+                    .query::<I18nApiV2>(abi::IFACE_I18N)
+                    .ok()
+                    .and_then(|table| {
+                        table.release_bundle.map(|release| {
+                            // SAFETY: The resource remains owned by this plugin until release returns.
+                            unsafe { release(table.prefix.context, self.host.token, self.id) }
+                        })
+                    })
+            }
         };
         if !matches!(result, Some(PluginStatus::Ok | PluginStatus::StaleHandle))
             && let Some(callback) = self.callback.take()
@@ -322,6 +335,46 @@ impl LyricsApi {
             id,
             kind: ResourceKind::Lyrics,
             callback: Some(callback),
+        })
+    }
+}
+
+impl I18nApi {
+    /// Registers a translation bundle for one locale.
+    pub fn register_bundle(
+        &self,
+        language: &str,
+        pairs: &[(&str, &str)],
+    ) -> Result<Resource, Error> {
+        let table = self._host.query::<I18nApiV2>(abi::IFACE_I18N)?;
+        let register = table
+            .register_bundle
+            .ok_or(Error::MissingFunction("i18n.register_bundle"))?;
+        let values: Vec<TranslationPairV2> = pairs
+            .iter()
+            .map(|(key, value)| TranslationPairV2 {
+                key: Utf8Slice::borrowed(key),
+                value: Utf8Slice::borrowed(value),
+            })
+            .collect();
+        let count = u32::try_from(values.len()).map_err(|_| Error::Length)?;
+        let mut id = ResourceId::INVALID;
+        // SAFETY: The locale, pair array, and output remain live for this synchronous call.
+        success(unsafe {
+            register(
+                table.prefix.context,
+                self._host.token,
+                Utf8Slice::borrowed(language),
+                values.as_ptr(),
+                count,
+                &mut id,
+            )
+        })?;
+        Ok(Resource {
+            host: self._host.clone(),
+            id,
+            kind: ResourceKind::I18n,
+            callback: None,
         })
     }
 }

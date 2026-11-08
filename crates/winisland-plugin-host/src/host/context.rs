@@ -1,9 +1,12 @@
 use std::time::{Duration, Instant};
 
-use winisland_core::context::{Activity, ActivityContent, ActivityText, Priority};
+use winisland_core::context::{
+    Activity, ActivityContent, ActivityProgress, ActivityText, Priority,
+};
 use winisland_plugin_api::types::v2::context::CONTEXT_FLAG_SHOW_COMPACT;
 use winisland_plugin_api::{
-    ACTIVITY_ENABLED, ACTIVITY_KEEP_VISIBLE, SURFACE_COMPACT_MAIN, SURFACE_ENABLED, SURFACE_PAGE,
+    ACTIVITY_ENABLED, ACTIVITY_KEEP_VISIBLE, ACTIVITY_SECONDARY, SURFACE_COMPACT_MAIN,
+    SURFACE_ENABLED, SURFACE_PAGE,
 };
 
 use super::{PluginHost, fixed_text};
@@ -32,6 +35,8 @@ impl PluginHost {
                         compact_text: fixed_text(&data.compact_text),
                     }),
                     keep_visible: false,
+                    secondary: false,
+                    progress: None,
                     preferred_width: 0.0,
                     preferred_height: 0.0,
                     page: None,
@@ -65,6 +70,13 @@ impl PluginHost {
                 content: ActivityContent::Surface(spec.compact_surface.get()),
                 show_compact: spec.flags & ACTIVITY_ENABLED != 0,
                 keep_visible: spec.flags & ACTIVITY_KEEP_VISIBLE != 0,
+                secondary: spec.flags & ACTIVITY_SECONDARY != 0,
+                progress: record.status.map(|status| ActivityProgress {
+                    remaining_ms: status.remaining_ms,
+                    total_ms: status.total_ms,
+                    paused: status.paused,
+                    sampled_at: status.sampled_at,
+                }),
                 preferred_width: if spec.preferred_width > 0.0 {
                     spec.preferred_width
                 } else {

@@ -225,12 +225,13 @@ impl LingoSoulView {
         raw
     }
 
-    pub(super) fn update(&mut self, dt: f32) {
+    pub(super) fn update(&mut self, dt: f32) -> Option<u64> {
+        let mut timer = None;
         for command in self.link.take_commands() {
             match command {
                 AssistantCommand::Timer(seconds) => {
                     log::info!("LingoSoul: timer {seconds}s");
-                    crate::ui::expanded::timer_view::start_for(seconds);
+                    timer = Some(seconds);
                 }
                 AssistantCommand::OpenChat => self.open_panel(),
             }
@@ -334,6 +335,7 @@ impl LingoSoulView {
             self.phase += dt / 60.0 * (1.0 + 2.0 * self.level);
             self.dots += dt / 60.0;
         }
+        timer
     }
 
     /// Whether the island is showing an exchange: the drop, dots, a reply or the panel.

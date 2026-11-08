@@ -65,6 +65,8 @@ pub(crate) struct ServiceState {
     pub host_state: HostStateV2,
     pub subscriptions: HashMap<u64, SubscriptionRecord>,
     pub disabled_widgets: Vec<WidgetId>,
+    pub alert: Option<AlertRecord>,
+    pub alert_revision: u64,
 }
 
 pub(crate) struct ContextRecord {
@@ -75,6 +77,23 @@ pub(crate) struct ContextRecord {
 pub(crate) struct ActivityRecord {
     pub spec: winisland_plugin_api::ActivitySpecV2,
     pub updated_at: Instant,
+    pub status: Option<ActivityStatusRecord>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ActivityStatusRecord {
+    pub remaining_ms: u64,
+    pub total_ms: u64,
+    pub paused: bool,
+    pub sampled_at: Instant,
+}
+
+pub(crate) struct AlertRecord {
+    pub token: PluginToken,
+    pub title: String,
+    pub body: String,
+    pub icon: String,
+    pub dismissed: bool,
 }
 
 pub(crate) struct WidgetRecord {
@@ -175,6 +194,8 @@ impl HostRuntime {
                 host_state: HostStateV2::default(),
                 subscriptions: HashMap::new(),
                 disabled_widgets: Vec::new(),
+                alert: None,
+                alert_revision: 0,
             }),
             store_root,
             store_lock: Mutex::new(()),
@@ -383,6 +404,14 @@ impl HostRuntime {
         self.extensions.revoke(token);
         let mut state = self.state.lock().map_err(|_| PluginStatus::Internal)?;
         let revoked = self.resources.revoke_plugin(token)?;
+        if state
+            .alert
+            .as_ref()
+            .is_some_and(|alert| alert.token == token)
+        {
+            state.alert = None;
+            state.alert_revision = state.alert_revision.wrapping_add(1);
+        }
         let mut translations = Vec::new();
         for (id, kind) in &revoked {
             match kind {

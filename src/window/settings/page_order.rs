@@ -136,7 +136,10 @@ impl SettingsApp {
             .as_ref()
             .map(|host| host.pages())
             .unwrap_or_default();
-        pages.retain(|page| page.plugin_id != crate::plugin::calendar::ID);
+        pages.retain(|page| {
+            page.plugin_id != crate::plugin::calendar::ID
+                && page.plugin_id != crate::plugin::timer::ID
+        });
         pages
     }
 

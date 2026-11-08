@@ -44,6 +44,7 @@ dependencies = [
  "winisland-plugin-calendar",
  "winisland-plugin-host",
  "winisland-plugin-package",
+ "winisland-plugin-timer",
  "winisland-render",
  "winres",
  "zip 8.6.0",
@@ -5693,6 +5694,13 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "zip 8.6.0",
+]
+
+[[package]]
+name = "winisland-plugin-timer"
+version = "2.0.0"
+dependencies = [
+ "winisland-plugin-api",
 ]
 
 [[package]]

@@ -4,6 +4,7 @@ use winisland_core::multitask::{Presentation, Task, TaskId};
 use winisland_platform::DeviceActivity;
 
 use crate::platform::WindowRef;
+use crate::ui::island::multitask::activities::Indicator;
 
 use super::App;
 
@@ -13,7 +14,7 @@ const POP_AT_COLLAPSE: f32 = 0.5;
 impl App {
     pub(super) fn status_orb_rect(&self) -> Option<winisland_render::Rect> {
         let frame = self.multitask.frame().filter(|frame| {
-            (frame.task.content.has_timer()
+            (frame.task.content.has_indicator()
                 || frame.task.content.plugin_surface().is_some()
                 || frame.task.content.has_assistant())
                 && frame.content_opacity > 0.5
@@ -59,9 +60,14 @@ impl App {
                 .find(|(_, spec)| spec.kind == winisland_plugin_api::SURFACE_STATUS)
                 .map(|(id, _)| id)
         });
+        let indicator = self.secondary_indicator.map(|secondary| Indicator {
+            progress: secondary.progress.fraction(now),
+            paused: secondary.progress.paused,
+            page: secondary.page,
+        });
         let indicators_changed = self.status_indicators.update(
             activity,
-            self.timer_content.filter(|_| self.timer_orb),
+            indicator,
             plugin_status,
             self.lingosoul.resume_activity(now),
             now,

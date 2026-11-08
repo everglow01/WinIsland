@@ -154,16 +154,6 @@ pub(super) fn draw_expanded_content(
                         distance.abs() < 0.01 && expansion_progress > 0.99,
                     );
                 }
-                ExpandedPage::Timer => crate::ui::expanded::timer_view::draw_timer_page(
-                    painter,
-                    offset_x,
-                    offset_y,
-                    current_w,
-                    current_h,
-                    alpha,
-                    global_scale,
-                    text_color,
-                ),
             }
             painter.restore();
         }

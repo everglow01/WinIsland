@@ -62,7 +62,6 @@ pub(crate) fn lyric_pair_height(font_size: f32, global_scale: f32) -> f32 {
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum MiniContent<'a> {
     Music,
-    Timer(crate::ui::compact::timer::TimerContent),
     Text(&'a ActivityText),
     Surface(u64),
 }
@@ -107,18 +106,6 @@ pub(super) fn draw_mini_content(params: MiniContentParams<'_>) {
     let alpha = scaled_alpha(u8::MAX, params.mini_alpha);
     match content {
         MiniContent::Music => draw_music_content(&params, alpha),
-        MiniContent::Timer(timer) => crate::ui::compact::timer::draw_countdown(
-            params.painter,
-            timer,
-            Rect::from_xywh(
-                params.offset_x,
-                params.stable_offset_y,
-                params.current_w,
-                params.base_h,
-            ),
-            params.global_scale,
-            params.mini_alpha,
-        ),
         MiniContent::Text(context) => draw_plugin_content(&params, context, alpha),
         MiniContent::Surface(id) => {
             if let Some(host) = params.plugin_host {

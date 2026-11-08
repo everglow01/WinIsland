@@ -135,7 +135,6 @@ impl App {
     }
 
     pub(super) fn handle_press(&mut self, rel_x: i32, rel_y: i32, layout: &IslandLayout) {
-        crate::ui::expanded::timer_view::clear_selection();
         if !self.expanded
             && let Some(orb) = self.status_orb_rect()
             && orb.contains(winisland_render::Point::new(rel_x as f32, rel_y as f32))
@@ -151,7 +150,9 @@ impl App {
                 return;
             }
             let target = match self.multitask.frame().map(|frame| frame.task.content) {
-                Some(content) if content.has_timer() => Some(ExpandedPage::Timer),
+                Some(content) if content.has_indicator() => {
+                    content.indicator_page().map(ExpandedPage::Plugin)
+                }
                 Some(content) => content
                     .plugin_surface()
                     .and_then(|(id, _)| self.plugin_host.as_ref()?.sibling_page(id))
@@ -197,9 +198,9 @@ impl App {
         if !self.expanded
             && !self.is_hidden()
             && is_hovering_visible
-            && self.compact_overlay.is_timer_finished_visible()
+            && self.compact_overlay.is_alert_visible()
         {
-            if self.compact_overlay.timer_finished_close_hit(
+            if self.compact_overlay.alert_close_hit(
                 rel_x as f32,
                 rel_y as f32,
                 winisland_render::Rect::from_xywh(
@@ -209,11 +210,10 @@ impl App {
                     self.springs.h.value,
                 ),
                 self.config.compact_scale,
-            ) && self.compact_overlay.dismiss_timer_finished()
+            ) && self.compact_overlay.dismiss_alert()
+                && let Some(host) = &self.plugin_host
             {
-                crate::ui::expanded::timer_view::apply_action(
-                    crate::ui::expanded::timer_view::TimerAction::Cancel,
-                );
+                host.dismiss_alert();
             }
             self.idle_timer = Instant::now();
             if let Some(window) = &self.window {
@@ -496,23 +496,6 @@ impl App {
                 }
             }
 
-            if self.page_focused(ExpandedPage::Timer)
-                && let Some(action) = crate::ui::expanded::timer_view::hit_test(
-                    offset_x as f32 + self.page_translation(ExpandedPage::Timer),
-                    island_y as f32,
-                    w as f32,
-                    h as f32,
-                    self.config.expanded_scale,
-                    winisland_render::Point::new(rel_x as f32, rel_y as f32),
-                )
-            {
-                crate::ui::expanded::timer_view::apply_action(action);
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
-                return;
-            }
-
             if (rel_y as f64) < island_y + 40.0 * scale {
                 self.expanded_header_press =
                     Some((rel_x + self.geom.win_x, rel_y + self.geom.win_y));
@@ -658,7 +641,6 @@ impl App {
             return;
         }
         self.compact_overlay.dismiss_link();
-        crate::ui::expanded::timer_view::clear_selection();
         if self.hide.has_hidden_reason() {
             self.reveal_island();
         }

@@ -10,10 +10,10 @@ use crate::types::v2::settings::{
 };
 use crate::types::v2::widget::WidgetSpecV2;
 use crate::types::v2::{
-    ActivitySpecV2, AssistantToolSpecV2, ByteSlice, CommandInfoV2, CommandSpecV2,
-    EventSubscriptionV2, ImageId, InputRegionV2, IslandStateV2, LocalDateTimeV2, LunarDateV2,
-    MediaSessionV2, PluginEventV2, PluginToken, ResourceId, SurfaceSpecV2, TextMetricsV2,
-    TextStyleV2, TimerSpecV2, Utf8Slice, WidgetId,
+    ActivitySpecV2, ActivityStatusV2, AlertSpecV2, AlertStateV2, AssistantToolSpecV2, ByteSlice,
+    CommandInfoV2, CommandSpecV2, EventSubscriptionV2, ImageId, InputRegionV2, IslandStateV2,
+    LocalDateTimeV2, LunarDateV2, MediaSessionV2, PluginEventV2, PluginToken, ResourceId,
+    SurfaceSpecV2, TextMetricsV2, TextStyleV2, TimerSpecV2, Utf8Slice, WidgetId,
 };
 
 macro_rules! assert_layout {
@@ -53,6 +53,44 @@ assert_layout!(
     preferred_width = 32,
     preferred_height = 36
 );
+assert_layout!(
+    ActivityStatusV2,
+    24,
+    8,
+    struct_size = 0,
+    flags = 4,
+    remaining_ms = 8,
+    total_ms = 16
+);
+assert_layout!(
+    AlertSpecV2,
+    792,
+    8,
+    struct_size = 0,
+    flags = 4,
+    title = 8,
+    body = 264,
+    icon = 776
+);
+assert_layout!(
+    AlertStateV2,
+    8,
+    4,
+    struct_size = 0,
+    visible = 4,
+    reserved = 5
+);
+assert_layout!(
+    NotificationApiV2,
+    48,
+    8,
+    prefix = 0,
+    toast = 16,
+    alert = 24,
+    dismiss_alert = 32,
+    alert_state = 40
+);
+assert_layout!(IndicatorApiV2, 32, 8, prefix = 0, set = 16, clear = 24);
 
 assert_layout!(
     SystemApiV2,
