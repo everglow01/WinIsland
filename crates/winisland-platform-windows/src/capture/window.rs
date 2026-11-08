@@ -18,7 +18,7 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, EnumChildWindows,
-    EnumWindows, GA_ROOT, GWL_EXSTYLE, GWL_STYLE, GetAncestor, GetClassNameW, GetParent,
+    EnumWindows, GA_PARENT, GA_ROOT, GWL_EXSTYLE, GWL_STYLE, GetAncestor, GetClassNameW, GetParent,
     GetShellWindow, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId,
     IsIconic, IsWindowVisible, MSG, PM_REMOVE, PeekMessageW, RegisterClassW, SM_XVIRTUALSCREEN,
     SM_YVIRTUALSCREEN, SW_SHOWNOACTIVATE, ShowWindow, TranslateMessage, WM_SETTINGCHANGE,
@@ -124,6 +124,8 @@ pub(super) struct Scene {
     excluded: Vec<HWND>,
     windows: Vec<DesktopWindow>,
     pending_windows: Vec<DesktopWindow>,
+    hidden_windows: Vec<HWND>,
+    pending_hidden: Vec<HWND>,
     refresh_error: Option<String>,
     checked: Instant,
     wallpaper_dirty: bool,
@@ -158,10 +160,11 @@ impl Scene {
         let mut excluded: Vec<_> = excluded.iter().map(|&raw| HWND(raw as *mut _)).collect();
         excluded.push(host.0);
         let mut windows = Vec::new();
-        window_stack(&excluded, &mut windows)?;
+        let mut hidden_windows = Vec::new();
+        window_stack(&excluded, &mut windows, &mut hidden_windows)?;
         let desktop_windows = desktop_windows()?;
-        let mut desktop_excluded = excluded.clone();
-        desktop_excluded.extend_from_slice(&desktop_windows.roots);
+        let desktop_excluded =
+            capture_exclusions(&excluded, &desktop_windows.roots, &hidden_windows);
         let (desktop, visual) = Desktop::new(
             host.0,
             &composition.native,
@@ -224,6 +227,8 @@ impl Scene {
             excluded,
             windows,
             pending_windows: Vec::new(),
+            hidden_windows,
+            pending_hidden: Vec::new(),
             refresh_error: None,
             checked: Instant::now(),
             wallpaper_dirty: true,
@@ -291,16 +296,29 @@ impl Scene {
             self.checked = Instant::now();
             self.wallpaper_dirty = false;
         }
-        window_stack(&self.excluded, &mut self.pending_windows)?;
-        if self.windows != self.pending_windows {
-            self.refresh_desktop()?;
+        window_stack(
+            &self.excluded,
+            &mut self.pending_windows,
+            &mut self.pending_hidden,
+        )?;
+        let visibility_changed = self.hidden_windows != self.pending_hidden;
+        if self.windows != self.pending_windows || visibility_changed {
+            let excluded = visibility_changed.then(|| {
+                capture_exclusions(
+                    &self.excluded,
+                    &self.wallpapers.sources.roots,
+                    &self.pending_hidden,
+                )
+            });
+            self.refresh_desktop(excluded)?;
             std::mem::swap(&mut self.windows, &mut self.pending_windows);
+            std::mem::swap(&mut self.hidden_windows, &mut self.pending_hidden);
         }
         Ok(())
     }
 
-    fn refresh_desktop(&mut self) -> Result<()> {
-        let replacement = match self.desktop.refresh() {
+    fn refresh_desktop(&mut self, excluded: Option<Vec<HWND>>) -> Result<()> {
+        let replacement = match self.desktop.refresh(excluded) {
             Ok(()) => None,
             Err(error) if error.code() == E_INVALIDARG => {
                 log::warn!("DWM desktop update was invalidated; recreating the source: {error}");
@@ -379,8 +397,8 @@ impl Scene {
                 sources,
                 system_background,
             )?;
-            let mut excluded = self.excluded.clone();
-            excluded.extend_from_slice(&next.sources.roots);
+            let excluded =
+                capture_exclusions(&self.excluded, &next.sources.roots, &self.hidden_windows);
             self.desktop.set_excluded(excluded)?;
             // SAFETY: Both wallpaper trees and the window visual share this compositor. The
             // old thumbnails remain registered until the replacement has reached DWM.
@@ -417,6 +435,7 @@ impl WallpaperLayers {
     ) -> Result<Self> {
         // SAFETY: The visual is retained with its creating compositor.
         let visual = unsafe { composition.native.CreateVisual()? };
+        let live_hosts = live_wallpaper_hosts(&sources, bounds);
         let mut thumbnails = Vec::new();
         let mut captured = Vec::new();
         let mut unavailable = 0;
@@ -431,8 +450,24 @@ impl WallpaperLayers {
                     GetWindowLongPtrW(source.hwnd, GWL_EXSTYLE) as u32,
                 )
             };
-            if shell && (system_background || extended & WS_EX_NOREDIRECTIONBITMAP.0 != 0) {
+            let live_host = live_hosts.contains(&source.hwnd);
+            if shell
+                && !live_host
+                && (system_background || extended & WS_EX_NOREDIRECTIONBITMAP.0 != 0)
+            {
                 continue;
+            }
+            if !shell && extended & WS_EX_NOREDIRECTIONBITMAP.0 != 0 {
+                // Unredirected child surfaces can be absent from their own thumbnails. Keep
+                // the containing desktop host's composition instead of covering it with that snapshot.
+                // SAFETY: The enumerated handle is queried without accessing caller memory.
+                let host = unsafe { GetAncestor(source.hwnd, GA_ROOT) };
+                let visible = intersection(bounds, source.bounds);
+                if captured.iter().any(|(window, region)| {
+                    *window == host && intersection(*region, visible) == visible
+                }) {
+                    continue;
+                }
             }
             let mut capture_window = source.hwnd;
             let mut capture_bounds = source.bounds;
@@ -501,6 +536,12 @@ impl WallpaperLayers {
                     }
                     thumbnails.push(thumbnail);
                     captured.push((capture_window, visible));
+                    if system_background && live_host {
+                        log::info!(
+                            "Liquid glass preserves live wallpaper host {:?}",
+                            source.hwnd
+                        );
+                    }
                     if system_background && !shell {
                         log::info!(
                             "Liquid glass live wallpaper source {:?}, capture window {:?}",
@@ -530,6 +571,34 @@ impl WallpaperLayers {
             system_background,
         })
     }
+}
+
+fn live_wallpaper_hosts(sources: &DesktopSources, bounds: Rect) -> Vec<HWND> {
+    let mut hosts = Vec::new();
+    for source in &sources.windows {
+        if rect_size(intersection(bounds, source.bounds)).is_none() {
+            continue;
+        }
+        let mut process = 0;
+        // SAFETY: All handles originate from enumeration; ancestor queries are read-only and
+        // stop at the actual root, so an owner window is not mistaken for a composition parent.
+        unsafe {
+            GetWindowThreadProcessId(source.hwnd, Some(&mut process));
+            if process == 0 || process == sources.process {
+                continue;
+            }
+            let root = GetAncestor(source.hwnd, GA_ROOT);
+            let mut parent = source.hwnd;
+            while parent != root && !parent.is_invalid() {
+                parent = GetAncestor(parent, GA_PARENT);
+                if parent.is_invalid() || hosts.contains(&parent) {
+                    break;
+                }
+                hosts.push(parent);
+            }
+        }
+    }
+    hosts
 }
 
 #[derive(PartialEq)]
@@ -625,37 +694,40 @@ fn desktop_children(parent: HWND, shell_process: u32, windows: &mut Vec<DesktopW
     struct Children {
         parent: HWND,
         shell_process: u32,
-        windows: Vec<DesktopWindow>,
+        windows: Vec<(HWND, Option<Rect>)>,
     }
     unsafe extern "system" fn collect(hwnd: HWND, parameter: LPARAM) -> BOOL {
         // SAFETY: EnumChildWindows invokes this synchronously with the live Children below.
         let children = unsafe { &mut *(parameter.0 as *mut Children) };
         let mut class = [0_u16; 64];
         let mut process = 0;
-        let mut bounds = RECT::default();
+        let mut rect = RECT::default();
+        let mut bounds = None;
         // SAFETY: HWND comes from enumeration; buffers are initialized and writable.
         unsafe {
-            if GetParent(hwnd).ok() != Some(children.parent) || !IsWindowVisible(hwnd).as_bool() {
+            if GetParent(hwnd).ok() != Some(children.parent) {
                 return true.into();
             }
             let length = GetClassNameW(hwnd, &mut class).max(0) as usize;
             let worker = class[..length] == *w!("WorkerW").as_wide();
             GetWindowThreadProcessId(hwnd, Some(&mut process));
-            if (!worker && process == children.shell_process)
-                || GetWindowRect(hwnd, &mut bounds).is_err()
+            if (worker || process != children.shell_process)
+                && IsWindowVisible(hwnd).as_bool()
+                && !IsIconic(hwnd).as_bool()
+                && GetWindowRect(hwnd, &mut rect).is_ok()
             {
-                return true.into();
+                let rectangle = Rect {
+                    left: rect.left,
+                    top: rect.top,
+                    right: rect.right,
+                    bottom: rect.bottom,
+                };
+                if rect_size(rectangle).is_some() {
+                    bounds = Some(rectangle);
+                }
             }
         }
-        let bounds = Rect {
-            left: bounds.left,
-            top: bounds.top,
-            right: bounds.right,
-            bottom: bounds.bottom,
-        };
-        if rect_size(bounds).is_some() {
-            children.windows.push(DesktopWindow { hwnd, bounds });
-        }
+        children.windows.push((hwnd, bounds));
         true.into()
     }
     let mut children = Children {
@@ -672,17 +744,31 @@ fn desktop_children(parent: HWND, shell_process: u32, windows: &mut Vec<DesktopW
             LPARAM((&mut children as *mut Children) as isize),
         )
     };
-    for child in children.windows.into_iter().rev() {
-        let hwnd = child.hwnd;
-        windows.push(child);
+    for (hwnd, bounds) in children.windows.into_iter().rev() {
+        if let Some(bounds) = bounds {
+            windows.push(DesktopWindow { hwnd, bounds });
+        }
+        // Shell containers can host foreign wallpaper windows at any depth.
         desktop_children(hwnd, shell_process, windows);
     }
 }
 
-fn window_stack(excluded: &[HWND], windows: &mut Vec<DesktopWindow>) -> Result<()> {
+fn capture_exclusions(owned: &[HWND], shell: &[HWND], hidden: &[HWND]) -> Vec<HWND> {
+    let mut excluded: Vec<_> = owned.iter().chain(shell).chain(hidden).copied().collect();
+    excluded.sort_unstable_by_key(|hwnd| hwnd.0 as usize);
+    excluded.dedup();
+    excluded
+}
+
+fn window_stack(
+    excluded: &[HWND],
+    windows: &mut Vec<DesktopWindow>,
+    hidden: &mut Vec<HWND>,
+) -> Result<()> {
     struct Enumeration<'a> {
         excluded: &'a [HWND],
         windows: &'a mut Vec<DesktopWindow>,
+        hidden: &'a mut Vec<HWND>,
     }
     unsafe extern "system" fn collect(hwnd: HWND, parameter: LPARAM) -> BOOL {
         // SAFETY: EnumWindows invokes this synchronously while the enumeration and slice are live.
@@ -690,11 +776,14 @@ fn window_stack(excluded: &[HWND], windows: &mut Vec<DesktopWindow>) -> Result<(
         let mut rect = RECT::default();
         // SAFETY: HWND is supplied by EnumWindows; these calls only query window state.
         unsafe {
-            if enumeration.excluded.contains(&hwnd)
-                || !IsWindowVisible(hwnd).as_bool()
-                || IsIconic(hwnd).as_bool()
-                || GetWindowRect(hwnd, &mut rect).is_err()
-            {
+            if enumeration.excluded.contains(&hwnd) {
+                return true.into();
+            }
+            if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+                enumeration.hidden.push(hwnd);
+                return true.into();
+            }
+            if GetWindowRect(hwnd, &mut rect).is_err() {
                 return true.into();
             }
         }
@@ -711,6 +800,7 @@ fn window_stack(excluded: &[HWND], windows: &mut Vec<DesktopWindow>) -> Result<(
         .is_ok()
             && cloaked != 0
         {
+            enumeration.hidden.push(hwnd);
             return true.into();
         }
         enumeration.windows.push(DesktopWindow {
@@ -725,7 +815,12 @@ fn window_stack(excluded: &[HWND], windows: &mut Vec<DesktopWindow>) -> Result<(
         true.into()
     }
     windows.clear();
-    let mut enumeration = Enumeration { excluded, windows };
+    hidden.clear();
+    let mut enumeration = Enumeration {
+        excluded,
+        windows,
+        hidden,
+    };
     // SAFETY: All callback data remains live until synchronous enumeration returns.
     unsafe {
         EnumWindows(
@@ -733,6 +828,9 @@ fn window_stack(excluded: &[HWND], windows: &mut Vec<DesktopWindow>) -> Result<(
             LPARAM((&mut enumeration as *mut Enumeration<'_>) as isize),
         )?
     };
+    enumeration
+        .hidden
+        .sort_unstable_by_key(|hwnd| hwnd.0 as usize);
     Ok(())
 }
 

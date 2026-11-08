@@ -303,11 +303,14 @@ impl Desktop {
             source,
             size,
         };
-        desktop.refresh()?;
+        desktop.refresh(None)?;
         Ok((desktop, visual))
     }
 
-    pub(super) fn refresh(&mut self) -> Result<()> {
+    pub(super) fn refresh(&mut self, excluded: Option<Vec<HWND>>) -> Result<()> {
+        if let Some(excluded) = excluded {
+            self.excluded = excluded;
+        }
         // Exclusion HWNDs can disappear when the shell or companion windows are recreated.
         self.excluded.retain(|hwnd| {
             // SAFETY: IsWindow validates the opaque handle without accessing caller memory.
@@ -356,7 +359,7 @@ impl Desktop {
             return Ok(());
         }
         self.excluded = excluded;
-        self.refresh()
+        self.refresh(None)
     }
 }
 
