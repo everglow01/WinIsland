@@ -378,10 +378,9 @@ impl Renderer {
         if let Some(backdrop) = self.backdrop.as_mut() {
             backdrop.finish_frame(self.device.queue())?;
         }
-        // Flip-model interval zero lets DWM discard superseded captures instead of queuing them.
         let live_backdrop =
             target_id == MAIN_TARGET && self.backdrop.as_ref().is_some_and(SharedBackdrop::ready);
-        let present_result = target.present(u32::from(!live_backdrop));
+        let present_result = target.present();
         self.device.check_health()?;
         present_result?;
         if live_backdrop && let Some(backdrop) = &mut self.backdrop {

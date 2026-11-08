@@ -16,6 +16,7 @@ use windows::{
                     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
                 },
                 DXGI_PRESENT, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1,
+                DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
                 DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGISwapChain3,
             },
         },
@@ -61,6 +62,7 @@ impl RenderTarget {
             Scaling: DXGI_SCALING_STRETCH,
             SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
             AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED,
+            Flags: DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 as u32,
             ..Default::default()
         };
         // SAFETY: The initialized descriptor and retained DIRECT queue satisfy composition swap-chain requirements.
@@ -71,6 +73,9 @@ impl RenderTarget {
         }
         .and_then(|swap_chain| swap_chain.cast())
         .map_err(|error| format!("Composition swap chain creation failed: {error}"))?;
+        // SAFETY: This swap chain was created with per-swap-chain latency control enabled.
+        unsafe { swap_chain.SetMaximumFrameLatency(1) }
+            .map_err(|error| format!("Presentation queue limit failed: {error}"))?;
         let surfaces = wrap_buffers(&swap_chain, &mut device.context, width, height)?;
         let hwnd = surface.handle();
         // SAFETY: The window is kept alive by the retained keepalive below, and each window has one
@@ -114,9 +119,9 @@ impl RenderTarget {
             .ok_or_else(|| RenderError::Backend("DXGI back buffer is unavailable".to_string()))
     }
 
-    pub(crate) fn present(&self, sync_interval: u32) -> RenderResult<()> {
+    pub(crate) fn present(&self) -> RenderResult<()> {
         // SAFETY: Renderer flushes the current surface with Present access and submits on this swap chain's queue.
-        unsafe { self.swap_chain.Present(sync_interval, DXGI_PRESENT(0)).ok() }
+        unsafe { self.swap_chain.Present(1, DXGI_PRESENT(0)).ok() }
             .map_err(|error| format!("DXGI presentation failed: {error}").into())
     }
 
@@ -141,7 +146,7 @@ impl RenderTarget {
                 width,
                 height,
                 DXGI_FORMAT_R8G8B8A8_UNORM,
-                Default::default(),
+                DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
             )
         }
         .map_err(|error| format!("DXGI buffer resize failed: {error}"))?;

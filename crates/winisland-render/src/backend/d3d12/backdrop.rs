@@ -197,7 +197,7 @@ impl SharedBackdrop {
         if now >= self.next_report
             && let Some(captured) = frame.captured_at
         {
-            log::debug!(
+            log::info!(
                 "Liquid glass capture-to-present submission: {:.1} ms",
                 now.saturating_duration_since(captured).as_secs_f64() * 1000.0
             );

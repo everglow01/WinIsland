@@ -50,6 +50,7 @@ pub(super) fn run(graphics: Arc<Graphics>, shared: Arc<Shared>, excluded: Vec<is
         {
             session.scene.settings_changed();
         }
+        let frame_deadline = session.as_ref().and_then(Session::pending_frame_deadline);
         let (request, refresh, arrived) = {
             let mut control = shared.control.lock();
             if control.stopped {
@@ -70,8 +71,10 @@ pub(super) fn run(graphics: Arc<Graphics>, shared: Arc<Shared>, excluded: Vec<is
                     request.rate_hz,
                 )
             });
-            let refresh = Instant::now() >= next || configuration_changed;
-            let arrived = std::mem::take(&mut control.frame_arrived) && session.is_some();
+            let now = Instant::now();
+            let refresh = now >= next || configuration_changed;
+            let arrived = (std::mem::take(&mut control.frame_arrived) && session.is_some())
+                || frame_deadline.is_some_and(|deadline| now >= deadline);
             if let Some(request) = control.request
                 && (refresh || arrived)
             {
@@ -80,7 +83,9 @@ pub(super) fn run(graphics: Arc<Graphics>, shared: Arc<Shared>, excluded: Vec<is
                 let wait = if control.request.is_none() {
                     MESSAGE_INTERVAL
                 } else {
-                    next.saturating_duration_since(Instant::now())
+                    frame_deadline
+                        .map_or(next, |deadline| deadline.min(next))
+                        .saturating_duration_since(Instant::now())
                         .min(MESSAGE_INTERVAL)
                 };
                 shared.changed.wait_for(&mut control, wait);
@@ -259,7 +264,7 @@ impl Stream {
             })
         {
             log::debug!(
-                "Capture interval control is unavailable; using compositor timing: {error}"
+                "Capture interval control is unavailable; using software frame pacing: {error}"
             );
             self.rate_control = false;
         }
@@ -348,6 +353,7 @@ struct Session {
     size: (u32, u32),
     snapshot: ID3D11Texture2D,
     last_frame: Instant,
+    next_frame: Instant,
     ready: bool,
 }
 
@@ -387,8 +393,18 @@ impl Session {
             size,
             snapshot,
             last_frame: Instant::now(),
+            next_frame: Instant::now(),
             ready: false,
         })
+    }
+
+    fn pending_frame_deadline(&self) -> Option<Instant> {
+        self.stream
+            .frames
+            .lock()
+            .latest
+            .as_ref()
+            .map(|_| self.next_frame)
     }
 
     fn update(
@@ -426,7 +442,10 @@ impl Session {
             // SAFETY: The capture device is owned by this session and shared with a protected context.
             unsafe { self.graphics.device.GetDeviceRemovedReason() }
                 .map_err(|error| format!("Desktop capture device was removed: {error}"))?;
-            self.stream.set_rate(request.rate_hz);
+            if self.stream.rate_hz != request.rate_hz {
+                self.next_frame = Instant::now();
+                self.stream.set_rate(request.rate_hz);
+            }
         }
         let area = request.area;
         if self.area != area || self.pixel_scale != request.pixel_scale {
@@ -445,6 +464,7 @@ impl Session {
             self.size = size;
             self.ready = false;
             self.last_frame = Instant::now();
+            self.next_frame = Instant::now();
             shared.latest.lock().frame = None;
         }
         // An unchanged desktop can stop producing frames. Only an initial or resized frame is overdue.
@@ -453,6 +473,11 @@ impl Session {
         }
         if !arrived && !refresh {
             return Ok(self.ready);
+        }
+        // Keep an early frame in the mailbox. The worker wakes at this deadline even if no
+        // further frame arrives, so pacing cannot discard the final desktop update.
+        if self.ready && Instant::now() < self.next_frame {
+            return Ok(true);
         }
         let Some(frame) = self.stream.frames.lock().latest.take() else {
             return Ok(self.ready);
@@ -520,6 +545,13 @@ impl Session {
         }
         self.ready = true;
         self.last_frame = Instant::now();
+        let interval = Duration::from_secs_f64(1.0 / f64::from(request.rate_hz));
+        let next = self.next_frame + interval;
+        self.next_frame = if next > self.last_frame {
+            next
+        } else {
+            self.last_frame + interval
+        };
         shared.wake();
         Ok(true)
     }
