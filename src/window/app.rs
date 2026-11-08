@@ -1,4 +1,5 @@
 use crate::core::audio::AudioProcessor;
+use crate::core::memory::MemoryReclaimer;
 use crate::core::persistence::{get_config_path, load_config};
 use crate::core::smtc::{MediaInfo, SmtcListener};
 use crate::platform::WindowRef;
@@ -132,7 +133,7 @@ pub struct App {
     monitor_check: Every,
     display_settle_until: Option<Instant>,
     display_transition: bool,
-    working_set_trim: Every,
+    memory: MemoryReclaimer,
     compact_widget_refresh: Cooldown,
     last_config_modified: Option<SystemTime>,
     next_frame_deadline: Instant,
@@ -284,7 +285,7 @@ impl Default for App {
             monitor_check: Every::secs(1),
             display_settle_until: None,
             display_transition: false,
-            working_set_trim: Every::new(frame::WORKING_SET_TRIM_INTERVAL),
+            memory: MemoryReclaimer::default(),
             compact_widget_refresh: Cooldown::ready(),
             last_config_modified,
             next_frame_deadline: Instant::now(),

@@ -487,12 +487,6 @@ impl App {
                 renderer.remove_target(target);
             }
             drop(settings);
-            if !self.expanded {
-                if let Err(error) = crate::platform::metrics().trim_working_set() {
-                    log::warn!("Working set trim failed: {error}");
-                }
-                self.working_set_trim.restart(Instant::now());
-            }
             log::info!("Settings window closed and resources released");
         }
     }

@@ -702,6 +702,7 @@ impl AppHandler for App {
         self.on_about_to_wait();
         let mut deadline = self.next_frame_deadline;
         let mut precise = self.precise_frame_pacing;
+        let mut auxiliary_active = false;
         if let Some(settings_deadline) = self
             .settings
             .as_mut()
@@ -709,6 +710,7 @@ impl AppHandler for App {
         {
             deadline = deadline.min(settings_deadline);
             precise = true;
+            auxiliary_active = true;
         }
         if let Some(guide_deadline) = self
             .guide
@@ -717,8 +719,10 @@ impl AppHandler for App {
         {
             deadline = deadline.min(guide_deadline);
             precise = true;
+            auxiliary_active = true;
         }
         self.handle_plugin_settings_request();
+        self.memory.update(Instant::now(), auxiliary_active);
         self.window.map(|_| WakeDeadline { deadline, precise })
     }
 

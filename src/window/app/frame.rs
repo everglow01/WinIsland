@@ -1,5 +1,6 @@
 use std::time::{Duration, Instant};
 
+use crate::core::memory::MemoryActivity;
 use crate::platform::WindowRef;
 use crate::ui::compact::CompactOverlayState;
 use crate::ui::expanded::music_view::{
@@ -20,7 +21,6 @@ const IDLE_FRAME_INTERVAL: Duration = Duration::from_millis(50);
 const SETTLE_PIXELS: f32 = 0.1;
 const SETTLE_PIXEL_VELOCITY: f32 = 0.05;
 const HIDDEN_FRAME_INTERVAL: Duration = Duration::from_millis(100);
-pub(super) const WORKING_SET_TRIM_INTERVAL: Duration = Duration::from_secs(20);
 const RENDERER_RECOVERY_INTERVAL: Duration = Duration::from_secs(1);
 const COVER_WAIT: Duration = Duration::from_millis(2500);
 const LYRIC_TRANSITION_STEP: f32 = 0.05;
@@ -100,6 +100,7 @@ impl App {
         self.last_update_time = now;
 
         if !self.visible {
+            self.memory.set_activity(MemoryActivity::default());
             self.compact_overlay.finish_volume_drag();
             self.compact_overlay.finish_brightness_drag();
             self.audio.set_gate_override(false);
@@ -1255,15 +1256,17 @@ impl App {
             || (self.expanded
                 && self.page_visible(ExpandedPage::Timer)
                 && crate::ui::expanded::timer_view::needs_frames());
-        if !transition_active
-            && !interactive_active
-            && !resource_usage_active
-            && (!self.expanded || (!playback_active && !dynamic_effect_active))
-            && self.working_set_trim.due(now)
-            && let Err(error) = crate::platform::metrics().trim_working_set()
-        {
-            log::warn!("Working set trim failed: {error}");
-        }
+        self.memory.set_activity(MemoryActivity {
+            animating: transition_active,
+            interacting: self.input_pressed()
+                || self.right_press_cursor.is_some()
+                || self.plugin_ui.pressed_buttons != 0
+                || self.plugin_ui.touch_id.is_some(),
+            resource_updates: resource_usage_active,
+            expanded: self.expanded,
+            playback: playback_active,
+            dynamic_background: dynamic_effect_active,
+        });
         self.precise_frame_pacing = transition_active
             || playback_active
             || dynamic_effect_active
