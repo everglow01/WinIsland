@@ -22,6 +22,7 @@
 //! platform results this crate operates on.
 
 pub mod anim;
+pub mod assistant;
 pub mod config;
 pub mod context;
 pub mod i18n;

@@ -1,0 +1,2 @@
+This message was transcribed from speech while the chat panel was open. Interpret likely transcription errors in context.
+The response appears in a scrollable panel. Lead with the answer and include useful details. Markdown, lists, tables, and code blocks are supported. Avoid emoji.

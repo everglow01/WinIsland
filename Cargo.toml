@@ -16,10 +16,15 @@ members = [
     "crates/winisland-render",
     "crates/winisland-platform",
     "crates/winisland-platform-windows",
+    "crates/winisland-lingosoul",
 ]
 
 [workspace.package]
 version = "2.0.0"
+
+[features]
+default = ["lingosoul"]
+lingosoul = ["dep:winisland-lingosoul"]
 
 [dependencies]
 base64 = "0.23.1"
@@ -54,6 +59,7 @@ winisland-core = { path = "crates/winisland-core" }
 winisland-render = { path = "crates/winisland-render" }
 winisland-platform = { path = "crates/winisland-platform" }
 winisland-platform-windows = { path = "crates/winisland-platform-windows" }
+winisland-lingosoul = { path = "crates/winisland-lingosoul", optional = true }
 pollkit = { path = "crates/pollkit" }
 settings-schema = { path = "crates/settings-schema" }
 zip = "8.6.0"

@@ -1,0 +1,35 @@
+[
+  {
+    "name": "silero-vad",
+    "target": "silero_vad.onnx",
+    "asset": "silero_vad.onnx",
+    "release": "asr-models",
+    "size": 643854,
+    "sha256": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
+    "files": {"silero_vad.onnx": 643854}
+  },
+  {
+    "name": "wake-word",
+    "target": "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20",
+    "asset": "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2",
+    "release": "kws-models",
+    "size": 32885699,
+    "sha256": "68447f4fbc67e70eee3a93961f36e81e98f47aef73ce7e7ca00885c6cd3616a6",
+    "files": {
+      "encoder-epoch-13-avg-2-chunk-16-left-64.int8.onnx": 4599656,
+      "decoder-epoch-13-avg-2-chunk-16-left-64.onnx": 759829,
+      "joiner-epoch-13-avg-2-chunk-16-left-64.int8.onnx": 86629,
+      "tokens.txt": 1928,
+      "en.phone": 3330061
+    }
+  },
+  {
+    "name": "speech-recognition",
+    "target": "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09",
+    "asset": "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2",
+    "release": "asr-models",
+    "size": 165783878,
+    "sha256": "7305f7905bfcf77fa0b39388a313f3da35c68d971661a65475b56fb2162c8e63",
+    "files": {"model.int8.onnx": 237115547, "tokens.txt": 315894}
+  }
+]
