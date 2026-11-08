@@ -3,9 +3,10 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
+use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
     KillTimer, MSG, SetCoalescableTimer, TIMERV_DEFAULT_COALESCING, USER_TIMER_MAXIMUM,
-    USER_TIMER_MINIMUM, WM_DWMCOMPOSITIONCHANGED, WM_TIMER,
+    USER_TIMER_MINIMUM, WM_DWMCOMPOSITIONCHANGED,
 };
 use winisland_platform::{
     AppHandler, DisplayProvider, InputState, Key, MouseButton, MouseWheelDelta, PlatformError,
@@ -49,12 +50,6 @@ pub(super) fn run(handler: &mut dyn AppHandler) -> Result<(), PlatformError> {
         if !message.is_null() {
             // SAFETY: winit supplies a valid MSG pointer for this synchronous callback.
             let message = unsafe { &*message.cast::<MSG>() };
-            if message.message == WM_TIMER
-                && message.hwnd.is_invalid()
-                && COALESCED_TIMER_ID.with(|id| id.get() != 0 && id.get() == message.wParam.0)
-            {
-                return true;
-            }
             if message.message == windows::Win32::UI::WindowsAndMessaging::WM_HOTKEY {
                 crate::shell::plugin_commands::pressed(message.wParam.0);
             }
@@ -167,8 +162,17 @@ impl CoalescedTimer {
             .div_ceil(1_000_000)
             .clamp(USER_TIMER_MINIMUM as u128, USER_TIMER_MAXIMUM as u128)
             as u32;
-        // SAFETY: The timer belongs to this event-loop thread and is handled by its message hook.
-        self.id = unsafe { SetCoalescableTimer(None, 0, timeout, None, TIMERV_DEFAULT_COALESCING) };
+        // SAFETY: The timer and callback belong to this event-loop thread. The callback only posts
+        // a coalesced wake, so nested Windows move/size loops never reenter the application handler.
+        self.id = unsafe {
+            SetCoalescableTimer(
+                None,
+                0,
+                timeout,
+                Some(timer_elapsed),
+                TIMERV_DEFAULT_COALESCING,
+            )
+        };
         if self.id == 0 {
             let error = windows::core::Error::from_thread();
             self.failed = true;
@@ -197,11 +201,38 @@ impl Drop for CoalescedTimer {
     }
 }
 
+unsafe extern "system" fn timer_elapsed(_window: HWND, _message: u32, timer: usize, _time: u32) {
+    if COALESCED_TIMER_ID.with(|id| id.get() != 0 && id.get() == timer) {
+        wake();
+    }
+}
+
 impl EventAdapter<'_> {
     fn composition_changed(&mut self) {
         if COMPOSITION_CHANGED.swap(false, Ordering::AcqRel) {
             self.handler.on_event(PlatformEvent::CompositionChanged);
         }
+    }
+
+    fn advance(&mut self, event_loop: &ActiveEventLoop) {
+        self.composition_changed();
+        let control_flow = match self.handler.on_about_to_wait() {
+            Some(wake) => {
+                let timer_available = self.idle_timer.arm(wake.deadline);
+                if wake.deadline <= Instant::now() {
+                    ControlFlow::Poll
+                } else if wake.precise || !timer_available {
+                    ControlFlow::WaitUntil(wake.deadline)
+                } else {
+                    ControlFlow::Wait
+                }
+            }
+            None => {
+                self.idle_timer.cancel();
+                ControlFlow::Wait
+            }
+        };
+        event_loop.set_control_flow(control_flow);
     }
 }
 
@@ -266,30 +297,13 @@ impl ApplicationHandler<()> for EventAdapter<'_> {
             WAKE_PENDING.store(false, Ordering::Release);
             self.composition_changed();
             self.handler.on_event(PlatformEvent::Wake);
+            self.advance(event_loop);
         });
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         scope_active_event_loop(event_loop, || {
-            self.composition_changed();
-            let control_flow = match self.handler.on_about_to_wait() {
-                Some(wake) if wake.deadline <= Instant::now() => {
-                    self.idle_timer.cancel();
-                    ControlFlow::Poll
-                }
-                Some(wake) if !wake.precise && self.idle_timer.arm(wake.deadline) => {
-                    ControlFlow::Wait
-                }
-                Some(wake) => {
-                    self.idle_timer.cancel();
-                    ControlFlow::WaitUntil(wake.deadline)
-                }
-                None => {
-                    self.idle_timer.cancel();
-                    ControlFlow::Wait
-                }
-            };
-            event_loop.set_control_flow(control_flow);
+            self.advance(event_loop);
         });
     }
 
