@@ -204,18 +204,18 @@ half4 shade(float2 p, float d, float2 g, float t, float pulse, float coverage) {
 
     float inward = max(-d, 0.0);
     float band = clamp(inward / max(bezelWidth, 1.0), 0.0, 1.0);
-    float u = 1.0 - band;
-    float u2 = u * u;
-    float slope = inward <= bezelWidth
-        ? min(2.0 * u2 * u / sqrt(max(1.0 - u2 * u2, kEpsilon)), kMaxSlope)
-        : 0.0;
-    float3 normal = normalize(float3(g * slope, 1.0));
-
-    float3 ray = refract(float3(0.0, 0.0, -1.0), normal, 1.0 / max(glassIor, 1.0001));
-    float2 shift = ray.z < 0.0
-        ? ray.xy / -ray.z * (thickness + inward * 0.5) * displacementFactor
-        : float2(0.0);
-    shift *= t + 7.0 * t * (1.0 - t);
+    float2 shift = float2(0.0);
+    if (inward < bezelWidth && displacementFactor != 0.0) {
+        float u = 1.0 - band;
+        float u2 = u * u;
+        float slope = min(2.0 * u2 * u / sqrt(max(1.0 - u2 * u2, kEpsilon)), kMaxSlope);
+        float3 normal = normalize(float3(g * slope, 1.0));
+        float3 ray = refract(float3(0.0, 0.0, -1.0), normal, 1.0 / max(glassIor, 1.0001));
+        if (ray.z < 0.0) {
+            shift = ray.xy / -ray.z * (thickness + inward * 0.5) * displacementFactor;
+            shift *= t + 7.0 * t * (1.0 - t);
+        }
+    }
 
     float spread = dispersion + morphDispersion * pulse;
     float3 glass;

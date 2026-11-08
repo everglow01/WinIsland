@@ -156,7 +156,7 @@ impl SettingsApp {
                 self.plugin_widgets
                     .iter()
                     .filter_map(|widget| {
-                        host.prepare_widget_frame(widget.id)
+                        host.prepare_widget_frame(widget.id, None)
                             .ok()
                             .flatten()
                             .map(|frame| (widget.id, frame))

@@ -250,6 +250,7 @@ impl PluginHost {
     pub fn prepare_widget_frame(
         &self,
         widget_id: u64,
+        previous: Option<&PreparedFrame>,
     ) -> Result<Option<PreparedFrame>, WidgetFrameError> {
         let token = self
             .runtime
@@ -261,7 +262,7 @@ impl PluginHost {
                 disabled: false,
             })?;
         let widget = unsafe { winisland_plugin_api::types::v2::WidgetId::from_raw(widget_id) };
-        self.runtime.prepare_widget_frame(token, widget)
+        self.runtime.prepare_widget_frame(token, widget, previous)
     }
 
     pub fn set_widget_logical_size(

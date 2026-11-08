@@ -34,7 +34,13 @@ impl RendererOptions {
 pub struct DrawingContext<'a> {
     direct_context: &'a mut gpu::DirectContext,
     backdrop: Option<&'a mut SharedBackdrop>,
-    motion_layer: &'a mut Option<Surface>,
+    motion_layer: &'a mut MotionLayer,
+}
+
+#[derive(Default)]
+struct MotionLayer {
+    surface: Option<Surface>,
+    filter: Option<(crate::BlurSpec, skia_safe::ImageFilter)>,
 }
 
 impl DrawingContext<'_> {
@@ -65,7 +71,7 @@ impl DrawingContext<'_> {
             .max(1.0) as i32;
         let width = width.saturating_add(63) / 64 * 64;
         let height = height.saturating_add(63) / 64 * 64;
-        let replace = self.motion_layer.as_ref().is_none_or(|surface| {
+        let replace = self.motion_layer.surface.as_ref().is_none_or(|surface| {
             surface.width() < width
                 || surface.height() < height
                 || surface.width() - width > 256
@@ -76,9 +82,9 @@ impl DrawingContext<'_> {
             let Some(surface) = self.render_surface(&info) else {
                 return draw(painter);
             };
-            *self.motion_layer = Some(surface);
+            self.motion_layer.surface = Some(surface);
         }
-        let Some(surface) = self.motion_layer.as_mut() else {
+        let Some(surface) = self.motion_layer.surface.as_mut() else {
             return draw(painter);
         };
         let canvas = surface.canvas();
@@ -91,13 +97,27 @@ impl DrawingContext<'_> {
         canvas.restore_to_count(1);
         // The snapshot carries its dependency into the window frame's submission.
         let image = surface.image_snapshot();
+        if self
+            .motion_layer
+            .filter
+            .as_ref()
+            .is_none_or(|(cached, _)| *cached != blur)
+        {
+            self.motion_layer.filter = image_filters::blur(
+                (sigma_x, sigma_y),
+                blur.tile.map(crate::convert::to_skia_tile_mode),
+                None,
+                None,
+            )
+            .map(|filter| (blur, filter));
+        }
         let mut paint = Paint::default();
-        paint.set_image_filter(image_filters::blur(
-            (sigma_x, sigma_y),
-            blur.tile.map(crate::convert::to_skia_tile_mode),
-            None,
-            None,
-        ));
+        paint.set_image_filter(
+            self.motion_layer
+                .filter
+                .as_ref()
+                .map(|(_, filter)| filter.clone()),
+        );
         let saved = painter.canvas.save();
         painter.canvas.reset_matrix();
         painter.canvas.draw_image(&image, (left, top), Some(&paint));
@@ -208,7 +228,7 @@ pub struct Renderer {
     next_target_id: u64,
     failure: Option<String>,
     backdrop: Option<SharedBackdrop>,
-    motion_layer: Option<Surface>,
+    motion_layer: MotionLayer,
 }
 
 impl Renderer {
@@ -223,7 +243,7 @@ impl Renderer {
             next_target_id: 1,
             failure: None,
             backdrop: None,
-            motion_layer: None,
+            motion_layer: MotionLayer::default(),
         })
     }
 
@@ -245,7 +265,7 @@ impl Renderer {
 
     fn prewarm_expansion_effects(device: &mut D3DDevice) {
         let info = ImageInfo::new_n32_premul((96, 96), None);
-        let mut motion_layer = None;
+        let mut motion_layer = MotionLayer::default();
         let mut drawing_context = DrawingContext {
             direct_context: &mut device.context,
             backdrop: None,
@@ -468,7 +488,7 @@ impl Drop for Renderer {
             self.device.context.abandon();
         }
         self.targets.clear();
-        self.motion_layer = None;
+        self.motion_layer = MotionLayer::default();
         self.backdrop = None;
     }
 }

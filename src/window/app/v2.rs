@@ -160,7 +160,7 @@ impl App {
             return;
         };
         for id in &self.v2_widget_ids {
-            match host.prepare_widget_frame(*id) {
+            match host.prepare_widget_frame(*id, self.plugin_frames.get(id)) {
                 Ok(Some(frame)) => {
                     self.plugin_frames.insert(*id, frame);
                 }
