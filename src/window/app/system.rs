@@ -1,8 +1,8 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use pollkit::Job;
 use winisland_platform::{HostBackdropParams, TrayAction, WindowSize};
+use winisland_utils::poll::Job;
 
 use crate::core::persistence::{get_config_path, load_config};
 use crate::platform::{WindowRef, window};
@@ -58,20 +58,25 @@ impl App {
             Some(crate::window::settings::PluginSettingsRequest::ShowGuide) => {
                 self.open_guide();
             }
+            #[cfg(feature = "lingosoul")]
             Some(crate::window::settings::PluginSettingsRequest::ClearLingoSoulHistory) => {
                 self.clear_lingosoul_history();
             }
+            #[cfg(feature = "lingosoul")]
             Some(crate::window::settings::PluginSettingsRequest::ReloadLingoSoul) => {
                 self.reload_lingosoul();
             }
-            Some(crate::window::settings::PluginSettingsRequest::InstallLingoSoul) => {
-                self.install_lingosoul();
+            #[cfg(feature = "lingosoul")]
+            Some(crate::window::settings::PluginSettingsRequest::DownloadLingoSoulModels) => {
+                self.download_lingosoul_models();
             }
-            Some(crate::window::settings::PluginSettingsRequest::StartLingoSoul) => {
-                self.start_lingosoul();
+            #[cfg(feature = "lingosoul")]
+            Some(crate::window::settings::PluginSettingsRequest::CancelLingoSoulDownload) => {
+                self.cancel_lingosoul_download();
             }
-            Some(crate::window::settings::PluginSettingsRequest::StopLingoSoul) => {
-                self.stop_lingosoul();
+            #[cfg(feature = "lingosoul")]
+            Some(crate::window::settings::PluginSettingsRequest::OpenLingoSoulChat) => {
+                self.open_chat_panel();
             }
             Some(crate::window::settings::PluginSettingsRequest::LoadMarketplace) => {
                 self.load_plugin_marketplace();
@@ -183,7 +188,6 @@ impl App {
     }
 
     pub(super) fn invalidate_renderer(&mut self, reason: &str, now: Instant) {
-        self.stop_recording();
         let renderer = self.renderer.take();
         if renderer.is_some() {
             log::warn!("Renderer invalidated: {reason}");
@@ -213,49 +217,6 @@ impl App {
         };
         if !self.host_backdrop {
             crate::platform::update_capabilities(|caps| caps.host_backdrop = false);
-        }
-    }
-
-    pub(super) fn start_recording(&mut self) {
-        let Some(renderer) = self.renderer.as_mut() else {
-            return;
-        };
-        match crate::utils::recorder::Recorder::start() {
-            Ok((recorder, frames)) => {
-                renderer.start_recording(frames, crate::utils::recorder::RECORDING_FPS);
-                self.recorder = Some(recorder);
-                log::info!("Recording island footage");
-            }
-            Err(error) => log::warn!("Recording could not start: {error}"),
-        }
-        self.refresh_tray_labels();
-    }
-
-    pub(super) fn stop_recording(&mut self) {
-        let Some(recorder) = self.recorder.take() else {
-            return;
-        };
-        if let Some(renderer) = self.renderer.as_mut() {
-            renderer.stop_recording();
-        }
-        match recorder.finish() {
-            Ok((directory, frames)) => {
-                log::info!("Recorded {frames} frames to {}", directory.display());
-                if let Err(error) = crate::platform::shell().reveal_path(&directory) {
-                    log::warn!("Recording folder could not be shown: {error}");
-                }
-            }
-            Err(error) => log::warn!("Recording could not be finished: {error}"),
-        }
-        self.refresh_tray_labels();
-    }
-
-    fn refresh_tray_labels(&self) {
-        if self.tray_installed {
-            let _ = crate::platform::shell().tray_update(
-                crate::platform::tray_theme(self.is_light_theme),
-                crate::platform::tray_labels(self.visible, self.recorder.is_some()),
-            );
         }
     }
 
@@ -531,12 +492,6 @@ impl App {
                 renderer.remove_target(target);
             }
             drop(settings);
-            if !self.expanded {
-                if let Err(error) = crate::platform::metrics().trim_working_set() {
-                    log::warn!("Working set trim failed: {error}");
-                }
-                self.working_set_trim.restart(Instant::now());
-            }
             log::info!("Settings window closed and resources released");
         }
     }
@@ -571,7 +526,7 @@ impl App {
                     }
                     let _ = crate::platform::shell().tray_update(
                         crate::platform::tray_theme(self.is_light_theme),
-                        crate::platform::tray_labels(self.visible, self.recorder.is_some()),
+                        crate::platform::tray_labels(self.visible),
                     );
                     log::info!("Tray: visibility toggled to {}", self.visible);
                 }
@@ -582,14 +537,6 @@ impl App {
                 TrayAction::ShowGuide => {
                     log::info!("Tray: opening beginner guide");
                     self.open_guide();
-                }
-                TrayAction::ToggleRecording => {
-                    if self.recorder.is_some() {
-                        self.stop_recording();
-                    } else {
-                        self.start_recording();
-                    }
-                    window_ref.request_redraw();
                 }
                 TrayAction::Restart => {
                     log::info!("Tray: restarting application");
@@ -664,6 +611,8 @@ impl App {
                     self.smtc.set_lyrics_mode(self.config.lyrics_mode.clone());
                     self.smtc
                         .set_lyrics_source(self.config.lyrics_source.clone());
+                    self.smtc
+                        .set_lyrics_fuzzy_search(self.config.lyrics_fuzzy_search);
                     self.smtc
                         .set_lyrics_local_dir(self.config.lyrics_local_dir.clone());
                     self.smtc
@@ -789,7 +738,6 @@ pub(super) struct BackdropCaptureInput {
     pub(super) frost_sigma: f32,
     pub(super) active: bool,
     pub(super) animating: bool,
-    pub(super) visible_to_capture: bool,
 }
 
 pub(super) fn update_backdrop_capture(
@@ -807,26 +755,13 @@ pub(super) fn update_backdrop_capture(
         renderer.release_backdrop();
         return false;
     }
-    if let BackdropCaptureState::Running { visible } = *state
-        && visible != input.visible_to_capture
-    {
-        stop_backdrop_capture(state, input.window);
-    }
     match *state {
-        BackdropCaptureState::Running { .. } => {}
+        BackdropCaptureState::Running => {}
         BackdropCaptureState::Failed(at) if at.elapsed() < BACKDROP_CAPTURE_RETRY => {
             return false;
         }
-        _ => match window().start_backdrop_capture(
-            window_ref.id(),
-            renderer.adapter_luid(),
-            input.visible_to_capture,
-        ) {
-            Ok(()) => {
-                *state = BackdropCaptureState::Running {
-                    visible: input.visible_to_capture,
-                }
-            }
+        _ => match window().start_backdrop_capture(window_ref.id(), renderer.adapter_luid()) {
+            Ok(()) => *state = BackdropCaptureState::Running,
             Err(error) => {
                 log::warn!("Liquid glass backdrop capture is unavailable: {error}");
                 *state = BackdropCaptureState::Failed(Instant::now());
@@ -835,7 +770,8 @@ pub(super) fn update_backdrop_capture(
         },
     }
     let size = window_ref.inner_size();
-    let share = match renderer.backdrop_share(size.width, size.height) {
+    let pixel_scale = if input.frost_sigma >= 0.3 { 2 } else { 1 };
+    let share = match renderer.backdrop_share(size.width, size.height, pixel_scale) {
         Ok(share) => share,
         Err(error) => {
             log::warn!("Liquid glass backdrop texture is unavailable: {error}");
@@ -847,14 +783,8 @@ pub(super) fn update_backdrop_capture(
     let (x, y) = input.origin;
     let margin = (input.frost_sigma * 3.0).ceil();
     let interest = input.interest;
-    let refresh_hz = (1_000_000_000 / input.frame_interval.as_nanos().max(1)) as u32;
-    let integrated =
-        crate::platform::display().gpu_profile() == winisland_platform::GpuProfile::Integrated;
-    let rate_limit = match (integrated, input.animating) {
-        (false, true) => 60,
-        (true, false) => 20,
-        _ => 30,
-    };
+    let refresh_hz = 1_000_000_000_u128.div_ceil(input.frame_interval.as_nanos().max(1)) as u32;
+    let rate_limit = if input.animating { 60 } else { 30 };
     let frame = window().update_backdrop_capture(
         window_ref.id(),
         BackdropCaptureRequest {
@@ -891,11 +821,11 @@ pub(super) fn update_backdrop_capture(
     renderer
         .set_backdrop_frame(frame, input.frost_sigma)
         .is_ok()
-        && frame.is_some()
+        && renderer.backdrop_ready()
 }
 
 fn stop_backdrop_capture(state: &mut BackdropCaptureState, window_ref: Option<WindowRef>) {
-    if !matches!(state, BackdropCaptureState::Running { .. }) {
+    if !matches!(state, BackdropCaptureState::Running) {
         return;
     }
     if let Some(window_ref) = window_ref {

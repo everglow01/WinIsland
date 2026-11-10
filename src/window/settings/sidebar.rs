@@ -28,6 +28,7 @@ const SIDEBAR_ICON_BYTES: [&[u8]; BUILTIN_SIDEBAR_PAGE_COUNT] = [
     include_bytes!("../../../resources/in_app/settings/music.png"),
     include_bytes!("../../../resources/in_app/settings/widget.png"),
     include_bytes!("../../../resources/in_app/settings/plugin.png"),
+    #[cfg(feature = "lingosoul")]
     include_bytes!("../../../resources/in_app/settings/lingosoul.png"),
     include_bytes!("../../../resources/in_app/settings/about.png"),
 ];
@@ -131,6 +132,14 @@ impl SettingsApp {
         let plugin_pages: Vec<usize> = (0..self.plugin_settings_pages.len())
             .map(|offset| BUILTIN_SIDEBAR_PAGE_COUNT + offset)
             .collect();
+        let content_pages = [
+            BuiltinPage::Music,
+            BuiltinPage::Widgets,
+            BuiltinPage::Plugins,
+            #[cfg(feature = "lingosoul")]
+            BuiltinPage::LingoSoul,
+        ]
+        .map(|page| page as usize);
         let groups: [&[usize]; 4] = [
             &[
                 BuiltinPage::General as usize,
@@ -139,12 +148,7 @@ impl SettingsApp {
                 BuiltinPage::Behavior as usize,
                 BuiltinPage::Alerts as usize,
             ],
-            &[
-                BuiltinPage::Music as usize,
-                BuiltinPage::Widgets as usize,
-                BuiltinPage::Plugins as usize,
-                BuiltinPage::LingoSoul as usize,
-            ],
+            &content_pages,
             &plugin_pages,
             &[BuiltinPage::About as usize],
         ];

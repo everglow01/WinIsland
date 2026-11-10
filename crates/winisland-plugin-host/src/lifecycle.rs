@@ -421,9 +421,10 @@ fn dispatch_event(runtime: &HostRuntime, identity: &Arc<PluginIdentity>, event: 
             request,
             response,
         } => {
-            let _ = response.send(lyrics::dispatch_transform(
-                runtime, identity, token, &request,
-            ));
+            let result = lyrics::dispatch_transform(runtime, identity, token, &request);
+            // The next transform stage must observe this worker as idle before it is woken.
+            drop(request);
+            let _ = response.send(result);
         }
         WorkerEvent::MediaCommand {
             id,

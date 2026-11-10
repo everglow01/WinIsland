@@ -103,8 +103,13 @@ jobs:
       run: |
         choco install ninja innosetup -y
 
+    - name: Prepare speech runtime
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: ./packaging/Prepare-SpeechRuntime.ps1
+
     - name: Build Release
-      run: cargo build --release --locked --verbose
+      run: cargo build --release --locked --features lingosoul --verbose
       env:
         WINISLAND_PACKAGE_CHANNEL: stable
 
@@ -183,6 +188,7 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{ env.TAG_NAME }}
+        target_commitish: ${{ github.sha }}
         name: ${{ env.TAG_NAME }}
         body_path: release_notes.txt
         draft: false

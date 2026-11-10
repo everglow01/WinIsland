@@ -169,7 +169,6 @@ pub fn start_update_checker() {
         let app_dir = get_app_dir();
         let mut last_check = tokio::time::Instant::now();
 
-        // Initial check
         if crate::core::persistence::load_config().check_for_updates {
             log::info!("Update checker started");
             do_check(&app_dir, false).await;

@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
-use std::sync::{Arc, LazyLock, OnceLock};
+use std::sync::{LazyLock, OnceLock};
 
 use parking_lot::RwLock;
 
@@ -14,7 +13,6 @@ pub struct I18n {
     pub current_lang: String,
     translations: HashMap<String, String>,
     pub available_languages: Vec<Language>,
-    lang_files: HashMap<String, String>,
     plugin_translation_bundles: BTreeMap<u64, PluginTranslationBundle>,
 }
 
@@ -25,36 +23,17 @@ struct PluginTranslationBundle {
 
 type EmbeddedLang = (&'static str, &'static str);
 
-static I18N: LazyLock<Arc<RwLock<I18n>>> = LazyLock::new(|| {
-    let i18n = I18n::new();
-    Arc::new(RwLock::new(i18n))
-});
+static I18N: LazyLock<RwLock<I18n>> = LazyLock::new(|| RwLock::new(I18n::new()));
 
 fn embedded_langs() -> &'static [EmbeddedLang] {
     &[
         (
-            "en_us.lang",
+            "en_us",
             include_str!("../../../../resources/in_app/lang/en_us.lang"),
         ),
         (
-            "zh_cn.lang",
+            "zh_cn",
             include_str!("../../../../resources/in_app/lang/zh_cn.lang"),
-        ),
-        (
-            "es_es.lang",
-            include_str!("../../../../resources/in_app/lang/es_es.lang"),
-        ),
-        (
-            "zh_tw.lang",
-            include_str!("../../../../resources/in_app/lang/zh_tw.lang"),
-        ),
-        (
-            "ja_jp.lang",
-            include_str!("../../../../resources/in_app/lang/ja_jp.lang"),
-        ),
-        (
-            "ko_kr.lang",
-            include_str!("../../../../resources/in_app/lang/ko_kr.lang"),
         ),
     ]
 }
@@ -89,100 +68,61 @@ fn parse_translations(content: &str) -> HashMap<String, String> {
         .collect()
 }
 
-fn format_args(template: &str, args: &[&str]) -> String {
+fn format_args(template: String, args: &[&str]) -> String {
     args.iter()
         .enumerate()
-        .fold(template.to_owned(), |result, (index, value)| {
+        .fold(template, |result, (index, value)| {
             result
                 .replacen("{}", value, 1)
                 .replace(&format!("{{{index}}}"), value)
         })
 }
 
-fn discover_disk_langs() -> (Vec<Language>, HashMap<String, String>) {
-    let mut languages = Vec::new();
-    let mut file_map = HashMap::new();
-    let dir = lang_dir();
-    if let Ok(entries) = std::fs::read_dir(&dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("lang")
-                && let Some(filename) = path.file_name().and_then(|n| n.to_str())
-                && let Ok(content) = std::fs::read_to_string(&path)
-            {
-                let code = Path::new(filename)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(filename)
-                    .to_string();
-                let name = parse_lang_name(&content).unwrap_or_else(|| code.clone());
-                file_map.insert(code.clone(), filename.to_string());
-                languages.push(Language { code, name });
-            }
-        }
-    }
-    (languages, file_map)
-}
-
 impl I18n {
     fn new() -> Self {
-        let (disk_langs, disk_files) = discover_disk_langs();
-        let mut available = disk_langs;
-        let file_map = disk_files;
-
-        for (filename, content) in embedded_langs() {
-            let code = Path::new(filename)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or(filename)
-                .to_string();
-            if !available.iter().any(|l| l.code == code) {
-                let name = parse_lang_name(content).unwrap_or_else(|| code.clone());
-                available.push(Language { code, name });
-            }
-        }
-
-        let default_lang = available
-            .first()
-            .map(|l| l.code.clone())
-            .unwrap_or_else(|| "en_us".to_string());
-
+        let available_languages = embedded_langs()
+            .iter()
+            .map(|(code, embedded)| {
+                let content = Self::load_file_content(code, embedded);
+                Language {
+                    code: (*code).to_string(),
+                    name: parse_lang_name(&content).unwrap_or_else(|| (*code).to_string()),
+                }
+            })
+            .collect();
         let mut i18n = I18n {
-            current_lang: default_lang.clone(),
+            current_lang: "en_us".to_string(),
             translations: HashMap::new(),
-            available_languages: available,
-            lang_files: file_map,
+            available_languages,
             plugin_translation_bundles: BTreeMap::new(),
         };
-        i18n.load(&default_lang);
+        i18n.load("en_us");
         i18n
     }
 
-    fn load_file_content(&self, lang: &str) -> Option<String> {
-        if let Some(filename) = self.lang_files.get(lang) {
-            let path = lang_dir().join(filename);
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                return Some(content);
-            }
-        }
-        for (filename, content) in embedded_langs() {
-            let code = Path::new(filename)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("");
-            if code == lang {
-                return Some(content.to_string());
-            }
-        }
-        None
+    fn load_file_content(lang: &str, embedded: &str) -> String {
+        std::fs::read_to_string(lang_dir().join(format!("{lang}.lang")))
+            .unwrap_or_else(|_| embedded.to_string())
     }
 
     pub fn load(&mut self, lang: &str) {
-        if let Some(content) = self.load_file_content(lang) {
+        let lang = if self
+            .available_languages
+            .iter()
+            .any(|language| language.code == lang)
+        {
+            lang
+        } else if lang.starts_with("zh") {
+            "zh_cn"
+        } else {
+            "en_us"
+        };
+        if let Some((_, embedded)) = embedded_langs().iter().find(|(code, _)| *code == lang) {
+            let content = Self::load_file_content(lang, embedded);
             self.current_lang = lang.to_string();
             self.translations = embedded_langs()
                 .iter()
-                .find(|(filename, _)| *filename == "en_us.lang")
+                .find(|(code, _)| *code == "en_us")
                 .map(|(_, content)| parse_translations(content))
                 .unwrap_or_default();
             self.translations.extend(parse_translations(&content));
@@ -258,7 +198,7 @@ pub fn tr(key: &str) -> String {
 
 pub fn tr_args(key: &str, args: &[&str]) -> String {
     let template = I18N.read().get(key);
-    format_args(&template, args)
+    format_args(template, args)
 }
 
 pub fn available_langs() -> Vec<Language> {
@@ -286,25 +226,7 @@ fn get_system_lang() -> String {
     };
     let lower = provider().to_lowercase();
     if lower.starts_with("zh") {
-        return if lower.contains("tw")
-            || lower.contains("hk")
-            || lower.contains("mo")
-            || lower.contains("hant")
-        {
-            "zh_tw"
-        } else {
-            "zh_cn"
-        }
-        .to_string();
-    }
-    if lower.starts_with("ja") {
-        return "ja_jp".to_string();
-    }
-    if lower.starts_with("ko") {
-        return "ko_kr".to_string();
-    }
-    if lower.starts_with("es") {
-        return "es_es".to_string();
+        return "zh_cn".to_string();
     }
     "en_us".to_string()
 }

@@ -16,7 +16,7 @@ pub fn apply(builder: reqwest::ClientBuilder, configured: &str) -> reqwest::Clie
         }
         match crate::platform::shell().system_proxy() {
             Some(address) => {
-                log::info!("Using the system proxy {address}");
+                log::info!("Using the system proxy");
                 address
             }
             None => return builder,
@@ -29,7 +29,7 @@ pub fn apply(builder: reqwest::ClientBuilder, configured: &str) -> reqwest::Clie
             builder.proxy(proxy.no_proxy(reqwest::NoProxy::from_string("localhost,127.0.0.1,::1")))
         }
         Err(error) => {
-            log::warn!("Ignoring proxy {address}: {error}");
+            log::warn!("Ignoring an invalid proxy: {error}");
             builder
         }
     }

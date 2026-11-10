@@ -2,13 +2,13 @@ use std::ffi::c_void;
 
 use winisland_plugin_api::abi::{CAP_LYRICS, PluginStatus};
 use winisland_plugin_api::types::v2::lyrics::{
-    LYRICS_TRANSFORMER_FLAG_SECONDARY, LyricsTransformerDataV2,
+    LYRICS_TRANSFORMER_FLAG_FONT_FAMILY, LYRICS_TRANSFORMER_FLAG_SECONDARY, LyricsTransformerDataV2,
 };
 use winisland_plugin_api::types::v2::{PluginToken, ResourceId};
 
 use super::{read_struct, runtime};
 use crate::resources::ResourceKind;
-use crate::runtime::LyricsRecord;
+use crate::runtime::{LyricsKind, LyricsRecord};
 
 pub unsafe extern "C" fn register(
     context: *mut c_void,
@@ -29,9 +29,12 @@ pub unsafe extern "C" fn register(
     if let Err(status) = host.registry.require(token, CAP_LYRICS) {
         return status;
     }
-    if data.flags & !LYRICS_TRANSFORMER_FLAG_SECONDARY != 0 {
-        return PluginStatus::InvalidArgument;
-    }
+    let kind = match data.flags {
+        0 => LyricsKind::Text,
+        LYRICS_TRANSFORMER_FLAG_SECONDARY => LyricsKind::Secondary,
+        LYRICS_TRANSFORMER_FLAG_FONT_FAMILY => LyricsKind::FontFamily,
+        _ => return PluginStatus::InvalidArgument,
+    };
     let Some(on_transform) = data.on_transform else {
         return PluginStatus::InvalidArgument;
     };
@@ -43,18 +46,17 @@ pub unsafe extern "C" fn register(
         let _ = host.resources.release(token, ResourceKind::Lyrics, id);
         return PluginStatus::Internal;
     };
-    let secondary = data.flags & LYRICS_TRANSFORMER_FLAG_SECONDARY != 0;
     let Ok(mut kinds) = host.lyrics_kinds.lock() else {
         let _ = host.resources.release(token, ResourceKind::Lyrics, id);
         return PluginStatus::Internal;
     };
-    kinds.insert(id, (token, secondary));
+    kinds.insert(id, (token, kind));
     state.lyrics.insert(
         id,
         LyricsRecord {
             on_transform,
             callback_data: data.callback_data as usize,
-            secondary,
+            kind,
             in_flight: 0,
         },
     );

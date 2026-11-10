@@ -1,8 +1,6 @@
 use std::collections::HashMap;
-use std::sync::mpsc::Sender;
-use std::time::{Duration, Instant};
 
-use skia_safe::{Color, ImageInfo, Paint, Rect, Surface, gpu, image_filters};
+use skia_safe::{AlphaType, Color, ColorType, ImageInfo, Paint, Rect, Surface, gpu, image_filters};
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -21,22 +19,6 @@ const MAIN_TARGET: RendererTargetId = RendererTargetId(0);
 
 static BACKDROP_GENERATION: AtomicU64 = AtomicU64::new(1);
 
-/// One composited main-window frame captured while recording, as opaque RGBA8 pixels.
-pub struct RecordedFrame {
-    pub width: u32,
-    pub height: u32,
-    pub pixels: Vec<u8>,
-    pub at: Instant,
-}
-
-struct Recording {
-    sender: Sender<RecordedFrame>,
-    interval: Duration,
-    next_due: Instant,
-    surface: Option<Surface>,
-    frame: Option<Surface>,
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct RendererOptions {
     pub width: u32,
@@ -52,9 +34,97 @@ impl RendererOptions {
 pub struct DrawingContext<'a> {
     direct_context: &'a mut gpu::DirectContext,
     backdrop: Option<&'a mut SharedBackdrop>,
+    motion_layer: &'a mut MotionLayer,
+}
+
+#[derive(Default)]
+struct MotionLayer {
+    surface: Option<Surface>,
+    filter: Option<(crate::BlurSpec, skia_safe::ImageFilter)>,
 }
 
 impl DrawingContext<'_> {
+    /// Draws motion-blurred content on a cleared surface before applying the destination clip.
+    pub fn with_motion_blur<T>(
+        &mut self,
+        painter: Painter<'_>,
+        blur: crate::BlurSpec,
+        reserve: (f32, f32),
+        draw: impl FnOnce(Painter<'_>) -> T,
+    ) -> T {
+        let Some(clip) = painter.canvas.device_clip_bounds() else {
+            return draw(painter);
+        };
+        let (sigma_x, sigma_y) = blur.sigma;
+        if !sigma_x.is_finite() || !sigma_y.is_finite() {
+            return draw(painter);
+        }
+        let pad_x = (sigma_x.max(0.0) * 3.0).ceil() + 1.0;
+        let pad_y = (sigma_y.max(0.0) * 3.0).ceil() + 1.0;
+        let left = clip.left as f32 - pad_x;
+        let top = clip.top as f32 - pad_y;
+        let width = ((clip.width() as f32).max(reserve.0 * 1.1) + pad_x * 2.0)
+            .ceil()
+            .max(1.0) as i32;
+        let height = ((clip.height() as f32).max(reserve.1 * 1.1) + pad_y * 2.0)
+            .ceil()
+            .max(1.0) as i32;
+        let width = width.saturating_add(63) / 64 * 64;
+        let height = height.saturating_add(63) / 64 * 64;
+        let replace = self.motion_layer.surface.as_ref().is_none_or(|surface| {
+            surface.width() < width
+                || surface.height() < height
+                || surface.width() - width > 256
+                || surface.height() - height > 256
+        });
+        if replace {
+            let info = ImageInfo::new((width, height), ColorType::RGBAF16, AlphaType::Premul, None);
+            let Some(surface) = self.render_surface(&info) else {
+                return draw(painter);
+            };
+            self.motion_layer.surface = Some(surface);
+        }
+        let Some(surface) = self.motion_layer.surface.as_mut() else {
+            return draw(painter);
+        };
+        let canvas = surface.canvas();
+        canvas.restore_to_count(1);
+        canvas.reset_matrix();
+        canvas.clear(Color::TRANSPARENT);
+        canvas.translate((-left, -top));
+        canvas.concat(&painter.canvas.local_to_device_as_3x3());
+        let result = draw(Painter { canvas });
+        canvas.restore_to_count(1);
+        // The snapshot carries its dependency into the window frame's submission.
+        let image = surface.image_snapshot();
+        if self
+            .motion_layer
+            .filter
+            .as_ref()
+            .is_none_or(|(cached, _)| *cached != blur)
+        {
+            self.motion_layer.filter = image_filters::blur(
+                (sigma_x, sigma_y),
+                blur.tile.map(crate::convert::to_skia_tile_mode),
+                None,
+                None,
+            )
+            .map(|filter| (blur, filter));
+        }
+        let mut paint = Paint::default();
+        paint.set_image_filter(
+            self.motion_layer
+                .filter
+                .as_ref()
+                .map(|(_, filter)| filter.clone()),
+        );
+        let saved = painter.canvas.save();
+        painter.canvas.reset_matrix();
+        painter.canvas.draw_image(&image, (left, top), Some(&paint));
+        painter.canvas.restore_to_count(saved);
+        result
+    }
+
     /// Returns the screen content captured beneath this frame's window, if any.
     pub fn backdrop(&mut self) -> Option<Backdrop> {
         let backdrop = self.backdrop.as_mut()?;
@@ -77,10 +147,16 @@ impl DrawingContext<'_> {
     }
 
     fn render_surface(&mut self, info: &ImageInfo) -> Option<Surface> {
+        // Keep byte-sized GPU effect targets in the swap chain's RGBA channel order.
+        let info = if info.color_type() == ColorType::BGRA8888 {
+            info.with_color_type(ColorType::RGBA8888)
+        } else {
+            info.clone()
+        };
         gpu::surfaces::render_target(
             self.direct_context,
             gpu::Budgeted::Yes,
-            info,
+            &info,
             None,
             Some(gpu::SurfaceOrigin::TopLeft),
             None,
@@ -152,7 +228,7 @@ pub struct Renderer {
     next_target_id: u64,
     failure: Option<String>,
     backdrop: Option<SharedBackdrop>,
-    recording: Option<Recording>,
+    motion_layer: MotionLayer,
 }
 
 impl Renderer {
@@ -167,7 +243,7 @@ impl Renderer {
             next_target_id: 1,
             failure: None,
             backdrop: None,
-            recording: None,
+            motion_layer: MotionLayer::default(),
         })
     }
 
@@ -189,9 +265,11 @@ impl Renderer {
 
     fn prewarm_expansion_effects(device: &mut D3DDevice) {
         let info = ImageInfo::new_n32_premul((96, 96), None);
+        let mut motion_layer = MotionLayer::default();
         let mut drawing_context = DrawingContext {
             direct_context: &mut device.context,
             backdrop: None,
+            motion_layer: &mut motion_layer,
         };
         let Some(mut surface) = drawing_context.render_surface(&info) else {
             return;
@@ -220,16 +298,26 @@ impl Renderer {
     }
 
     /// Returns a shared texture covering at least `width` x `height` pixels for backdrop capture.
-    pub fn backdrop_share(&mut self, width: u32, height: u32) -> RenderResult<BackdropShare> {
+    pub fn backdrop_share(
+        &mut self,
+        width: u32,
+        height: u32,
+        pixel_scale: u32,
+    ) -> RenderResult<BackdropShare> {
         self.check_ready()?;
+        let pixel_scale = pixel_scale.clamp(1, 2);
+        let width = width.div_ceil(pixel_scale);
+        let height = height.div_ceil(pixel_scale);
         if let Some(backdrop) = &self.backdrop
-            && backdrop.fits(width, height)
+            && backdrop.fits(width, height, pixel_scale)
         {
             return Ok(backdrop.share());
         }
         self.release_backdrop();
         let generation = BACKDROP_GENERATION.fetch_add(1, Ordering::Relaxed);
-        let backdrop = self.device.create_backdrop(width, height, generation)?;
+        let backdrop = self
+            .device
+            .create_backdrop(width, height, generation, pixel_scale)?;
         let share = backdrop.share();
         self.backdrop = Some(backdrop);
         Ok(share)
@@ -237,6 +325,10 @@ impl Renderer {
 
     pub fn backdrop_read_value(&self) -> u64 {
         self.backdrop.as_ref().map_or(0, SharedBackdrop::read_value)
+    }
+
+    pub fn backdrop_ready(&self) -> bool {
+        self.backdrop.as_ref().is_some_and(SharedBackdrop::ready)
     }
 
     /// Makes the next frames sample `frame`; the GPU waits for the capture copy before reading.
@@ -252,26 +344,6 @@ impl Renderer {
         self.record_result(result)
     }
 
-    /// Sends the main window composited over the captured screen behind it to `sender`, at most
-    /// `fps` times per second, until stopped or the receiver is dropped.
-    pub fn start_recording(&mut self, sender: Sender<RecordedFrame>, fps: u32) {
-        self.recording = Some(Recording {
-            sender,
-            interval: Duration::from_secs_f64(1.0 / f64::from(fps.max(1))),
-            next_due: Instant::now(),
-            surface: None,
-            frame: None,
-        });
-    }
-
-    pub fn stop_recording(&mut self) {
-        self.recording = None;
-    }
-
-    pub fn is_recording(&self) -> bool {
-        self.recording.is_some()
-    }
-
     pub fn release_backdrop(&mut self) {
         if self.backdrop.is_none() {
             return;
@@ -282,51 +354,40 @@ impl Renderer {
         self.backdrop = None;
     }
 
-    fn draw<T>(
-        &mut self,
-        target_id: RendererTargetId,
-        draw: impl FnOnce(&mut DrawingContext<'_>, &mut Surface) -> T,
-    ) -> RenderResult<T> {
-        let result = self.draw_inner(target_id, draw);
+    /// Returns false while presentation is busy and arranges a redraw when the surface is ready.
+    pub fn prepare_frame(&mut self, target_id: RendererTargetId) -> RenderResult<bool> {
+        let result = (|| {
+            self.check_ready()?;
+            self.targets
+                .get_mut(&target_id)
+                .ok_or_else(|| {
+                    RenderError::Backend("D3D12 render target is unavailable".to_string())
+                })?
+                .prepare_frame()
+        })();
         self.record_result(result)
     }
 
+    /// Draw after `prepare_frame` returns true; a busy target keeps its most recent frame.
     pub fn frame<T>(
         &mut self,
         target_id: RendererTargetId,
         draw: impl FnOnce(&mut DrawingContext<'_>, Painter<'_>) -> T,
     ) -> RenderResult<T> {
-        self.draw(target_id, |drawing_context, surface| {
-            draw(
-                drawing_context,
-                Painter {
-                    canvas: surface.canvas(),
-                },
-            )
-        })
+        let result = self.frame_inner(target_id, draw);
+        self.record_result(result)
     }
 
-    fn draw_inner<T>(
+    fn frame_inner<T>(
         &mut self,
         target_id: RendererTargetId,
-        draw: impl FnOnce(&mut DrawingContext<'_>, &mut Surface) -> T,
+        draw: impl FnOnce(&mut DrawingContext<'_>, Painter<'_>) -> T,
     ) -> RenderResult<T> {
         self.check_ready()?;
         let target = self.targets.get_mut(&target_id).ok_or_else(|| {
             RenderError::Backend("D3D12 render target is unavailable".to_string())
         })?;
-        let present = target.current_surface()?;
-        let mut offscreen = if target_id == MAIN_TARGET
-            && let Some(recording) = self.recording.as_mut()
-        {
-            recording.take_frame(&mut self.device.context, present.width(), present.height())
-        } else {
-            None
-        };
-        let surface = match offscreen.as_mut() {
-            Some(surface) => surface,
-            None => &mut *present,
-        };
+        let surface = target.current_surface()?;
         let canvas = surface.canvas();
         canvas.restore_to_count(1);
         canvas.reset_matrix();
@@ -336,33 +397,15 @@ impl Renderer {
             &mut DrawingContext {
                 direct_context: &mut self.device.context,
                 backdrop: self.backdrop.as_mut(),
+                motion_layer: &mut self.motion_layer,
             },
-            surface,
+            Painter {
+                canvas: surface.canvas(),
+            },
         );
         surface.canvas().restore_to_count(1);
-        if let Some(mut frame) = offscreen {
-            let image = frame.image_snapshot();
-            let canvas = present.canvas();
-            canvas.restore_to_count(1);
-            canvas.reset_matrix();
-            let mut paint = Paint::default();
-            paint.set_blend_mode(skia_safe::BlendMode::Src);
-            canvas.draw_image(&image, (0, 0), Some(&paint));
-            if let Some(recording) = self.recording.as_mut() {
-                let alive = record_frame(
-                    recording,
-                    &image,
-                    &mut self.device.context,
-                    self.backdrop.as_mut(),
-                );
-                recording.frame = Some(frame);
-                if !alive {
-                    self.recording = None;
-                }
-            }
-        }
         self.device.context.flush_surface_with_access(
-            present,
+            surface,
             skia_safe::surfaces::BackendSurfaceAccess::Present,
             &gpu::FlushInfo::default(),
         );
@@ -370,9 +413,14 @@ impl Renderer {
         if let Some(backdrop) = self.backdrop.as_mut() {
             backdrop.finish_frame(self.device.queue())?;
         }
+        let live_backdrop =
+            target_id == MAIN_TARGET && self.backdrop.as_ref().is_some_and(SharedBackdrop::ready);
         let present_result = target.present();
         self.device.check_health()?;
         present_result?;
+        if live_backdrop && let Some(backdrop) = &mut self.backdrop {
+            backdrop.report_latency();
+        }
         Ok(output)
     }
 
@@ -440,88 +488,7 @@ impl Drop for Renderer {
             self.device.context.abandon();
         }
         self.targets.clear();
+        self.motion_layer = MotionLayer::default();
+        self.backdrop = None;
     }
-}
-
-impl Recording {
-    fn take_frame(
-        &mut self,
-        context: &mut gpu::DirectContext,
-        width: i32,
-        height: i32,
-    ) -> Option<Surface> {
-        match self.frame.take() {
-            Some(surface) if surface.width() == width && surface.height() == height => {
-                Some(surface)
-            }
-            _ => gpu::surfaces::render_target(
-                context,
-                gpu::Budgeted::Yes,
-                &ImageInfo::new_n32_premul((width, height), None),
-                None,
-                Some(gpu::SurfaceOrigin::TopLeft),
-                None,
-                Some(false),
-                Some(false),
-            ),
-        }
-    }
-}
-
-fn record_frame(
-    recording: &mut Recording,
-    island: &skia_safe::Image,
-    context: &mut gpu::DirectContext,
-    backdrop: Option<&mut SharedBackdrop>,
-) -> bool {
-    let now = Instant::now();
-    if now < recording.next_due {
-        return true;
-    }
-    recording.next_due = now + recording.interval.mul_f32(0.75);
-    let (width, height) = (island.width(), island.height());
-    let info = ImageInfo::new(
-        (width, height),
-        skia_safe::ColorType::RGBA8888,
-        skia_safe::AlphaType::Premul,
-        None,
-    );
-    if recording
-        .surface
-        .as_ref()
-        .is_none_or(|export| export.width() != width || export.height() != height)
-    {
-        recording.surface = gpu::surfaces::render_target(
-            context,
-            gpu::Budgeted::Yes,
-            &info,
-            None,
-            Some(gpu::SurfaceOrigin::TopLeft),
-            None,
-            Some(false),
-            Some(false),
-        );
-    }
-    let Some(export) = recording.surface.as_mut() else {
-        return true;
-    };
-    let canvas = export.canvas();
-    canvas.clear(Color::BLACK);
-    if let Some((behind, _)) = backdrop.and_then(|backdrop| backdrop.images(context)) {
-        canvas.draw_image(&behind, (0, 0), None);
-    }
-    canvas.draw_image(island, (0, 0), None);
-    let mut pixels = vec![0_u8; info.compute_min_byte_size()];
-    if !export.read_pixels(&info, &mut pixels, info.min_row_bytes(), (0, 0)) {
-        return true;
-    }
-    recording
-        .sender
-        .send(RecordedFrame {
-            width: width as u32,
-            height: height as u32,
-            pixels,
-            at: now,
-        })
-        .is_ok()
 }

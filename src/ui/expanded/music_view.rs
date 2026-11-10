@@ -677,11 +677,7 @@ fn draw_cover(params: CoverParams) -> f32 {
         None
     };
 
-    let cover_img = if flip_use_old {
-        flip_old_img.or(image_to_draw.clone())
-    } else {
-        image_to_draw.clone()
-    };
+    let cover_img = flip_old_img.or(image_to_draw);
 
     painter.save();
     let img_cx = img_x + img_size / 2.0;

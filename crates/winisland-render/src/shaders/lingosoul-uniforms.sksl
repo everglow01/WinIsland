@@ -1,0 +1,3 @@
+uniform float4 shape0;
+uniform float4 lingosoul;
+uniform float4 lingosoulWave;

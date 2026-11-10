@@ -52,7 +52,15 @@ impl SettingsApp {
             page.group_start();
             page.setting(&self.config, AppConfigField::LyricsMode, true);
             page.setting(&self.config, AppConfigField::ShowLyrics, true);
+            page.setting(&self.config, AppConfigField::ShowTitleWhenNoLyrics, true);
+            if self.config.show_title_when_no_lyrics {
+                page.row_label(tr("show_title_when_no_lyrics_note"));
+            }
             if show_lyrics {
+                page.setting(&self.config, AppConfigField::LyricsFuzzySearch, true);
+                if self.config.lyrics_fuzzy_search {
+                    page.row_label(tr("lyrics_fuzzy_search_note"));
+                }
                 page.setting(&self.config, AppConfigField::ShowSecondaryLyrics, true);
             }
             if self.config.lyrics_mode == "lrc" {

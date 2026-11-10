@@ -1,6 +1,6 @@
-use settings_schema::{Kind, Settings, Value};
 use winisland_core::config::{AppConfig, AppConfigField};
 use winisland_core::i18n::tr;
+use winisland_utils::settings::{Kind, Settings, Value};
 
 use crate::utils::settings_ui::ClickResult;
 use crate::utils::settings_ui::items::SettingsItem;

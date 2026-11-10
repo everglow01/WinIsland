@@ -137,6 +137,17 @@ impl SettingsApp {
             }
         }
 
+        let Some(target) = self.renderer_target else {
+            return;
+        };
+        match renderer.prepare_frame(target) {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(error) => {
+                log::error!("Settings frame preparation failed: {error}");
+                return;
+            }
+        }
         self.ensure_items_cache();
         let plugin_frames = self
             .plugin_host
@@ -145,7 +156,7 @@ impl SettingsApp {
                 self.plugin_widgets
                     .iter()
                     .filter_map(|widget| {
-                        host.prepare_widget_frame(widget.id)
+                        host.prepare_widget_frame(widget.id, None)
                             .ok()
                             .flatten()
                             .map(|frame| (widget.id, frame))
@@ -156,10 +167,6 @@ impl SettingsApp {
         let theme = self.theme();
         let win_w = self.win_w / scale;
         let win_h = self.win_h / scale;
-        let target = match self.renderer_target {
-            Some(target) => target,
-            None => return,
-        };
         let panel = sidebar_panel(SIDEBAR_W, win_h);
         if self.window_backdrop {
             self.window_backdrop = crate::platform::window().update_window_backdrop(

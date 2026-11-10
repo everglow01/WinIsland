@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react'
@@ -13,18 +14,27 @@ import { MarkGithubIcon } from '@primer/octicons-react'
 import {
   ArrowRight,
   BadgeCheck,
+  Bell,
   Boxes,
+  Captions,
+  Check,
   ChevronRight,
   Code2,
+  Command,
+  Disc3,
   Download,
   Gauge,
   GitFork,
   Languages,
+  LayoutGrid,
   Menu,
+  MessageSquareText,
   Moon,
   Music2,
   Orbit,
+  Palette,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Sun,
   Waves,
@@ -36,8 +46,18 @@ import settingsIcon from '../../resources/in_app/settings/settings.png'
 import widgetIcon from '../../resources/in_app/settings/widget.png'
 import compactAfterglowEn from './assets/island/compact-afterglow-en.webp'
 import compactWanfengZh from './assets/island/compact-wanfeng-zh.webp'
+import heroPoster from './assets/media/hero-loop-poster.jpg'
 import { GlassFilter } from './components/GlassFilter'
 import { ProductDemo } from './components/ProductDemo'
+import Aurora from './components/reactbits/Aurora'
+import GlareHover from './components/reactbits/GlareHover'
+import LogoLoop from './components/reactbits/LogoLoop'
+import Magnet from './components/reactbits/Magnet'
+import ScrollStack, { ScrollStackItem } from './components/reactbits/ScrollStack'
+import ShinyText from './components/reactbits/ShinyText'
+import SpotlightCard from './components/reactbits/SpotlightCard'
+import StarBorder from './components/reactbits/StarBorder'
+import TiltedCard from './components/reactbits/TiltedCard'
 import {
   copy,
   DOC_KEYS,
@@ -51,6 +71,8 @@ import {
 } from './content'
 
 const DocumentPage = lazy(() => import('./components/DocumentPage'))
+const WinWidgetPage = lazy(() => import('./components/WinWidgetPage'))
+const LiquidGlassPage = lazy(() => import('./components/LiquidGlassPage'))
 type SiteTheme = 'light' | 'dark'
 
 const THEME_STORAGE_KEY = 'winisland-site-theme'
@@ -102,6 +124,8 @@ function useSiteTheme() {
 const pageFromPath = (pathname: string) => {
   const cleanPath = pathname.replace(/^\/zh(?=\/|$)/, '') || '/'
   if (cleanPath === '/') return 'home' as const
+  if (cleanPath === '/winwidget') return 'winwidget' as const
+  if (cleanPath === '/liquid-glass') return 'liquid-glass' as const
   const key = cleanPath.replace(/^\//, '') as DocKey
   return DOC_KEYS.includes(key) ? key : 'not-found'
 }
@@ -126,8 +150,10 @@ function Site() {
 
   useEffect(() => {
     document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en'
-    document.title = 'WinIsland'
-  }, [locale])
+    document.title = page === 'winwidget'
+      ? 'WinWidget Desktop'
+      : page === 'liquid-glass' ? 'Liquid Glass · WinIsland' : 'WinIsland'
+  }, [locale, page])
 
   return (
     <KonstaApp theme="ios" dark={theme === 'dark'} safeAreas={false} className="site-app">
@@ -135,9 +161,19 @@ function Site() {
       <SiteHeader locale={locale} theme={theme} onThemeToggle={toggleTheme} />
       <main>
         <div className="page-transition" key={page}>
-          {page === 'home' && <HomePage locale={locale} />}
+          {page === 'home' && <HomePage locale={locale} theme={theme} />}
           {page === 'download' && <DownloadPage locale={locale} />}
-          {page !== 'home' && page !== 'download' && page !== 'not-found' && (
+          {page === 'winwidget' && (
+            <Suspense fallback={<div className="docs-loading page-top section-shell" aria-busy="true"><span /></div>}>
+              <WinWidgetPage locale={locale} theme={theme} />
+            </Suspense>
+          )}
+          {page === 'liquid-glass' && (
+            <Suspense fallback={<div className="docs-loading page-top section-shell" aria-busy="true"><span /></div>}>
+              <LiquidGlassPage locale={locale} theme={theme} />
+            </Suspense>
+          )}
+          {page !== 'home' && page !== 'winwidget' && page !== 'liquid-glass' && page !== 'download' && page !== 'not-found' && (
             <Suspense fallback={<div className="docs-loading page-top section-shell" aria-busy="true"><span /></div>}>
               <DocumentPage key={`${locale}/${page}`} locale={locale} page={page} />
             </Suspense>
@@ -171,7 +207,13 @@ function SiteHeader({
   const currentPath = location.pathname.replace(/^\/zh(?=\/|$)/, '') || '/'
   const guidePaths = ['/guide', '/getting-started', '/plugin-dev', '/api-changelog']
   const isGuidePath = guidePaths.includes(currentPath) || currentPath.startsWith('/plugin-dev/')
-  const activeIndex = currentPath === '/' ? 0 : isGuidePath ? 1 : currentPath === '/changelog' ? 2 : -1
+  const activeIndex = currentPath === '/'
+    ? 0
+    : currentPath === '/winwidget'
+      ? 1
+      : currentPath === '/liquid-glass'
+        ? 2
+        : isGuidePath ? 3 : currentPath === '/changelog' ? 4 : -1
   const themeLabel = theme === 'dark'
     ? locale === 'zh' ? '切换为浅色模式' : 'Switch to light mode'
     : locale === 'zh' ? '切换为深色模式' : 'Switch to dark mode'
@@ -263,28 +305,46 @@ function SiteHeader({
             ref={(node) => { navLinks.current[1] = node }}
             className={activeIndex === 1 ? 'is-current' : ''}
             aria-current={activeIndex === 1 ? 'page' : undefined}
-            to={localePath(locale, '/guide')}
+            to={localePath(locale, '/winwidget')}
             onMouseEnter={() => moveIndicator(1)}
           >
-            {text.nav.guide}
+            {text.nav.winwidget}
           </Link>
           <Link
             ref={(node) => { navLinks.current[2] = node }}
             className={activeIndex === 2 ? 'is-current' : ''}
             aria-current={activeIndex === 2 ? 'page' : undefined}
-            to={localePath(locale, '/changelog')}
+            to={localePath(locale, '/liquid-glass')}
             onMouseEnter={() => moveIndicator(2)}
+          >
+            {text.nav.liquid}
+          </Link>
+          <Link
+            ref={(node) => { navLinks.current[3] = node }}
+            className={activeIndex === 3 ? 'is-current' : ''}
+            aria-current={activeIndex === 3 ? 'page' : undefined}
+            to={localePath(locale, '/guide')}
+            onMouseEnter={() => moveIndicator(3)}
+          >
+            {text.nav.guide}
+          </Link>
+          <Link
+            ref={(node) => { navLinks.current[4] = node }}
+            className={activeIndex === 4 ? 'is-current' : ''}
+            aria-current={activeIndex === 4 ? 'page' : undefined}
+            to={localePath(locale, '/changelog')}
+            onMouseEnter={() => moveIndicator(4)}
           >
             {text.nav.changelog}
           </Link>
           <a
-            ref={(node) => { navLinks.current[3] = node }}
+            ref={(node) => { navLinks.current[5] = node }}
             className="external-nav-link"
             href={GITHUB_URL}
             target="_blank"
             rel="noreferrer"
             aria-label="GitHub (opens in a new tab)"
-            onMouseEnter={() => moveIndicator(3)}
+            onMouseEnter={() => moveIndicator(5)}
           >
             <MarkGithubIcon size={16} />
             <span>GitHub</span>
@@ -343,9 +403,18 @@ function SiteHeader({
   )
 }
 
-function HomePage({ locale }: { locale: Locale }) {
+const SHOWCASE_ICONS = [Music2, Bell, LayoutGrid, Palette, Sparkles]
+const PLUGIN_ICONS = [MessageSquareText, Disc3, LayoutGrid, SlidersHorizontal, Command, Captions]
+const HOME_ACCENT = '#7c8cff'
+
+function HomePage({ locale, theme }: { locale: Locale; theme: SiteTheme }) {
   const text = copy[locale]
+  const dark = theme === 'dark'
   const [demoMode, setDemoMode] = useState<DemoMode>('media')
+  const capabilities = useMemo(
+    () => copy[locale].capabilities.map((label) => ({ node: <span className="site-loop-chip">{label}</span>, title: label })),
+    [locale],
+  )
 
   const scrollToMoments = () => {
     document.getElementById('moments')?.scrollIntoView({ behavior: 'smooth' })
@@ -354,9 +423,17 @@ function HomePage({ locale }: { locale: Locale }) {
   return (
     <>
       <section className="hero section-shell">
-        <div className="hero-aura hero-aura--blue" aria-hidden="true" />
-        <div className="hero-aura hero-aura--violet" aria-hidden="true" />
+        <div className="site-aurora" aria-hidden="true">
+          <Aurora colorStops={['#4ca7ff', '#a96aff', '#ff8ac4']} speed={0.6} blend={0.6} layers={2} height={0.42} opacity={dark ? 0.75 : 0.45} dpr={1} lightMode={!dark} />
+        </div>
         <div className="hero-copy">
+          <ShinyText
+            className="lg-eyebrow site-eyebrow"
+            text={text.hero.eyebrow}
+            color={dark ? '#a1a1aa' : '#6e6e73'}
+            shineColor={dark ? '#ffffff' : '#1d1d1f'}
+            speed={3}
+          />
           <h1 className={locale === 'zh' ? 'hero-title--zh' : undefined}>
             {locale === 'zh'
               ? text.hero.title.split('\n').map((line) => <span key={line}>{line}</span>)
@@ -364,28 +441,42 @@ function HomePage({ locale }: { locale: Locale }) {
           </h1>
           <p className="hero-body">{text.hero.body}</p>
           <div className="hero-actions">
-            <Link
-              className="apple-button apple-button--primary apple-link-button"
-              to={localePath(locale, '/download')}
-            >
-              <Download size={18} />
-              {text.hero.primary}
-            </Link>
-            <Button
-              className="apple-button apple-button--secondary"
-              large
-              rounded
-              tonal
-              onClick={scrollToMoments}
-            >
-              {text.hero.secondary}
-              <ChevronRight size={17} />
-            </Button>
+            <Magnet padding={40} magnetStrength={3}>
+              <StarBorder
+                as={Link}
+                className="site-star-button"
+                to={localePath(locale, '/download')}
+                radius={24}
+                color="#bfe2ff"
+                theme={theme}
+                backgroundColor="var(--blue)"
+                textColor="#fff"
+              >
+                <Download size={18} />
+                {text.hero.primary}
+              </StarBorder>
+            </Magnet>
+            <Magnet padding={40} magnetStrength={3}>
+              <Button
+                className="apple-button apple-button--secondary"
+                large
+                rounded
+                tonal
+                onClick={scrollToMoments}
+              >
+                {text.hero.secondary}
+                <ChevronRight size={17} />
+              </Button>
+            </Magnet>
           </div>
         </div>
 
         <ProductDemo locale={locale} variant="hero" />
       </section>
+
+      <div className="site-loop">
+        <LogoLoop logos={capabilities} speed={46} logoHeight={44} gap={12} pauseOnHover fadeOut ariaLabel={text.nav.product} />
+      </div>
 
       <section className="moments-section" id="moments">
         <div className="section-heading section-shell">
@@ -410,6 +501,37 @@ function HomePage({ locale }: { locale: Locale }) {
         </div>
       </section>
 
+      <section className="site-stack-section">
+        <div className="section-heading section-heading--center section-shell">
+          <h2>{text.showcase.title}</h2>
+          <p>{text.showcase.body}</p>
+        </div>
+        <div className="section-shell site-stack">
+          <ScrollStack useWindowScroll smoothScroll={false} stackPosition="16%" itemDistance={70} itemStackDistance={18} itemScale={0.03} baseScale={0.88} dimAmount={0.1} holdDistance={60}>
+            {text.showcase.items.map((item, index) => {
+              const Icon = SHOWCASE_ICONS[index]
+              return (
+                <ScrollStackItem key={item.title} itemClassName="site-stack-card">
+                  <div className="site-stack-copy">
+                    <small>{item.label}</small>
+                    <h3>{item.title}</h3>
+                    <p>{item.body}</p>
+                    <ul>
+                      {item.points.map((point) => <li key={point}><Check size={15} />{point}</li>)}
+                    </ul>
+                  </div>
+                  <div className={`site-stack-visual site-stack-visual--${index}`} aria-hidden="true">
+                    {index === 0
+                      ? <img src={locale === 'zh' ? compactWanfengZh : compactAfterglowEn} width={locale === 'zh' ? 266 : 397} height={47} alt="" />
+                      : <Icon size={84} strokeWidth={1.4} />}
+                  </div>
+                </ScrollStackItem>
+              )
+            })}
+          </ScrollStack>
+        </div>
+      </section>
+
       <section className="features-section section-shell">
         <div className="section-heading section-heading--center">
           <h2>{text.features.title}</h2>
@@ -418,40 +540,72 @@ function HomePage({ locale }: { locale: Locale }) {
           {text.features.items.map((feature, index) => {
             const Icon = [Music2, Waves, Sparkles][index]
             return (
-              <LiquidGlass
+              <SpotlightCard
                 key={feature.title}
-                className={`feature-card feature-card--${feature.accent}`}
-                contentClassName="feature-card-content"
+                className={`feature-card site-feature-card feature-card--${feature.accent}`}
+                theme={theme}
+                spotlightColor={HOME_ACCENT}
               >
-                <div className="feature-visual" aria-hidden="true">
-                  {index === 0 && (
-                    <img
-                      className="feature-island"
-                      src={locale === 'zh' ? compactWanfengZh : compactAfterglowEn}
-                      width={locale === 'zh' ? 266 : 397}
-                      height={47}
-                      alt=""
-                    />
-                  )}
-                  {index === 1 && (
-                    <div className="motion-orbits">
-                      <span /><span /><span />
-                      <Orbit />
-                    </div>
-                  )}
-                  {index === 2 && (
-                    <div className="widget-icons">
-                      <img src={widgetIcon} alt="" />
-                      <img src={settingsIcon} alt="" />
-                    </div>
-                  )}
+                <div className="feature-card-content">
+                  <div className="feature-visual" aria-hidden="true">
+                    <GlareHover className="site-feature-glare" width="100%" height="100%" background="transparent" borderColor="transparent" borderRadius="22px" glareColor="#ffffff" glareOpacity={0.35}>
+                      {index === 0 && (
+                        <img
+                          className="feature-island"
+                          src={locale === 'zh' ? compactWanfengZh : compactAfterglowEn}
+                          width={locale === 'zh' ? 266 : 397}
+                          height={47}
+                          alt=""
+                        />
+                      )}
+                      {index === 1 && (
+                        <div className="motion-orbits">
+                          <span /><span /><span />
+                          <Orbit />
+                        </div>
+                      )}
+                      {index === 2 && (
+                        <div className="widget-icons">
+                          <img src={widgetIcon} alt="" />
+                          <img src={settingsIcon} alt="" />
+                        </div>
+                      )}
+                    </GlareHover>
+                  </div>
+                  <span className="feature-icon"><Icon size={20} /></span>
+                  <h3>{feature.title}</h3>
+                  <p>{feature.body}</p>
                 </div>
-                <span className="feature-icon"><Icon size={20} /></span>
-                <h3>{feature.title}</h3>
-                <p>{feature.body}</p>
-              </LiquidGlass>
+              </SpotlightCard>
             )
           })}
+        </div>
+      </section>
+
+      <section className="section-shell site-glass">
+        <div className="lg-tilt">
+          <TiltedCard
+            imageSrc={heroPoster}
+            altText={text.glass.imageAlt}
+            containerWidth="100%"
+            containerHeight="100%"
+            imageWidth="100%"
+            imageHeight="100%"
+            radius={30}
+            rotateAmplitude={8}
+            scaleOnHover={1.03}
+            showTooltip={false}
+          />
+        </div>
+        <div className="site-glass-copy">
+          <h2>{text.glass.title}</h2>
+          <p>{text.glass.body}</p>
+          <ul>
+            {text.glass.points.map((point) => <li key={point}><Check size={16} />{point}</li>)}
+          </ul>
+          <Link className="site-text-link" to={localePath(locale, '/liquid-glass')}>
+            {text.glass.action}<ArrowRight size={16} />
+          </Link>
         </div>
       </section>
 
@@ -472,6 +626,25 @@ function HomePage({ locale }: { locale: Locale }) {
             )
           })}
         </LiquidGlass>
+      </section>
+
+      <section className="site-plugins section-shell">
+        <div className="section-heading section-heading--center">
+          <h2>{text.plugins.title}</h2>
+          <p>{text.plugins.body}</p>
+        </div>
+        <div className="site-card-grid">
+          {text.plugins.items.map((item, index) => {
+            const Icon = PLUGIN_ICONS[index]
+            return (
+              <SpotlightCard key={item.title} className="lg-step" theme={theme} spotlightColor={HOME_ACCENT}>
+                <span className="feature-icon"><Icon size={19} /></span>
+                <h3>{item.title}</h3>
+                <p>{item.body}</p>
+              </SpotlightCard>
+            )
+          })}
+        </div>
       </section>
 
       <section className="open-section section-shell">
@@ -588,11 +761,13 @@ function SiteFooter({ locale }: { locale: Locale }) {
         <div>
           <strong>{text.footer.product}</strong>
           <Link to={localePath(locale)}>{text.nav.product}</Link>
+          <Link to={localePath(locale, '/winwidget')}>WinWidget Desktop</Link>
           <Link to={localePath(locale, '/download')}>{text.nav.download}</Link>
         </div>
         <div>
           <strong>{text.footer.resources}</strong>
           <Link to={localePath(locale, '/guide')}>{text.nav.guide}</Link>
+          <Link to={localePath(locale, '/liquid-glass')}>Liquid Glass</Link>
           <Link to={localePath(locale, '/plugin-dev')}>{text.docs.pages['plugin-dev']}</Link>
           <Link to={localePath(locale, '/changelog')}>{text.nav.changelog}</Link>
         </div>

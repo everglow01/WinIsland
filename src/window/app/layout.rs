@@ -389,16 +389,18 @@ impl App {
         ))
     }
 
-    fn displayed_lyric_texts(&self) -> (&str, &str) {
-        let (primary, secondary) = if !self.lyrics.current_text.is_empty() {
+    fn displayed_lyric_texts(&self) -> (&str, &str, Option<&str>) {
+        let (primary, secondary, family) = if !self.lyrics.current_text.is_empty() {
             (
                 self.lyrics.current_text.as_str(),
                 self.lyrics.current_secondary_text.as_str(),
+                self.lyrics.current_font_family.as_deref(),
             )
         } else {
             (
                 self.lyrics.old_text.as_str(),
                 self.lyrics.old_secondary_text.as_str(),
+                self.lyrics.old_font_family.as_deref(),
             )
         };
         let secondary = if self.config.show_secondary_lyrics {
@@ -406,22 +408,27 @@ impl App {
         } else {
             ""
         };
-        (primary, secondary)
+        (primary, secondary, family)
     }
 
-    pub(super) fn measure_lyric_text_width(&self, text: &str) -> f32 {
+    fn measure_lyric_text_width(&self, text: &str, family: Option<&str>) -> f32 {
         let scale = self.config.compact_scale.max(f32::EPSILON);
         let font_size = crate::ui::island::mini_lyric_font_size(self.config.font_size, scale);
-        FontManager::global().measure_text_cached(
+        FontManager::for_family(family).measure_text_cached(
             text,
             font_size,
             crate::ui::island::MINI_LYRIC_WEIGHT,
         ) / scale
     }
 
-    fn measure_lyric_pair_width(&self, primary: &str, secondary: &str) -> f32 {
-        self.measure_lyric_text_width(primary)
-            .max(self.measure_lyric_text_width(secondary))
+    fn measure_lyric_pair_width(
+        &self,
+        primary: &str,
+        secondary: &str,
+        family: Option<&str>,
+    ) -> f32 {
+        self.measure_lyric_text_width(primary, family)
+            .max(self.measure_lyric_text_width(secondary, None))
     }
 
     pub(super) fn compute_lyric_target_width(
@@ -455,18 +462,17 @@ impl App {
             && compact
             && !self.is_width_hiding()
         {
-            let has_visible_lyrics = self.config.show_lyrics
-                && (!self.lyrics.current_text.is_empty()
-                    || (!self.lyrics.old_text.is_empty() && self.lyrics.transition < 1.0));
+            let has_visible_text = !self.lyrics.current_text.is_empty()
+                || (!self.lyrics.old_text.is_empty() && self.lyrics.transition < 1.0);
 
-            if has_visible_lyrics {
+            if has_visible_text {
                 let (left_inset, right_inset) =
                     crate::ui::island::mini_lyric_insets(self.config.lyrics_side_gap);
                 let horizontal_insets = left_inset + right_inset;
                 if self.config.lyrics_scroll {
-                    let (primary, secondary) = self.displayed_lyric_texts();
-                    let primary_w = self.measure_lyric_text_width(primary);
-                    let text_w = primary_w.max(self.measure_lyric_text_width(secondary));
+                    let (primary, secondary, family) = self.displayed_lyric_texts();
+                    let primary_w = self.measure_lyric_text_width(primary, family);
+                    let text_w = primary_w.max(self.measure_lyric_text_width(secondary, None));
                     let natural_w = horizontal_insets + text_w;
                     let max_w = self
                         .config
@@ -501,8 +507,8 @@ impl App {
                         natural_w.clamp(min_w.min(max_w), max_w)
                     }
                 } else {
-                    let (primary, secondary) = self.displayed_lyric_texts();
-                    let text_w = self.measure_lyric_pair_width(primary, secondary);
+                    let (primary, secondary, family) = self.displayed_lyric_texts();
+                    let text_w = self.measure_lyric_pair_width(primary, secondary, family);
                     self.lyrics.scroll_offset = 0.0;
                     let min_w = self.config.base_width + 35.0;
                     let w = horizontal_insets + text_w;

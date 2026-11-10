@@ -1,18 +1,18 @@
+mod alert;
 mod brightness;
 mod link;
 mod notification;
-pub(crate) mod timer;
 mod volume;
 
-use winisland_render::{Painter, Point, Rect};
+use winisland_render::{Painter, Path, Point, Rect};
 
 pub use self::link::LinkHit;
 pub(crate) use self::link::extract_link;
 
+use self::alert::AlertIndicator;
 use self::brightness::BrightnessMonitor;
 use self::link::LinkIndicator;
 use self::notification::{NotificationIndicator, NotificationMonitor};
-use self::timer::TimerFinishedIndicator;
 use self::volume::{VolumeIndicator, VolumeMonitor};
 
 #[derive(Clone, Copy)]
@@ -44,11 +44,11 @@ pub struct CompactOverlay {
     notification_monitor: NotificationMonitor,
     notification_indicator: NotificationIndicator,
     link_indicator: LinkIndicator,
-    timer_finished: TimerFinishedIndicator,
+    alert: AlertIndicator,
 }
 
 enum ActiveCompactOverlay<'a> {
-    TimerFinished(&'a TimerFinishedIndicator),
+    Alert(&'a AlertIndicator),
     Link(&'a LinkIndicator),
     Notification(&'a NotificationIndicator),
     Volume(&'a VolumeIndicator),
@@ -58,9 +58,7 @@ enum ActiveCompactOverlay<'a> {
 impl ActiveCompactOverlay<'_> {
     fn target_size(&self, base_width: f32, base_height: f32, scale: f32) -> CompactSize {
         match self {
-            Self::TimerFinished(_) => {
-                TimerFinishedIndicator::target_size(base_width, base_height, scale)
-            }
+            Self::Alert(_) => AlertIndicator::target_size(base_width, base_height, scale),
             Self::Link(_) => LinkIndicator::target_size(base_width, base_height, scale),
             Self::Notification(_) => {
                 NotificationIndicator::target_size(base_width, base_height, scale)
@@ -72,7 +70,7 @@ impl ActiveCompactOverlay<'_> {
 
     fn draw(&self, painter: Painter<'_>, rect: Rect, scale: f32, alpha: f32) {
         match self {
-            Self::TimerFinished(indicator) => indicator.draw(painter, rect, scale, alpha),
+            Self::Alert(indicator) => indicator.draw(painter, rect, scale, alpha),
             Self::Link(indicator) => indicator.draw(painter, rect, scale, alpha),
             Self::Notification(indicator) => indicator.draw(painter, rect, scale, alpha),
             Self::Volume(indicator) => indicator.draw(painter, rect, scale, alpha),
@@ -93,7 +91,7 @@ impl CompactOverlay {
             notification_monitor: NotificationMonitor::default(),
             notification_indicator: NotificationIndicator::default(),
             link_indicator: LinkIndicator::default(),
-            timer_finished: TimerFinishedIndicator::default(),
+            alert: AlertIndicator::default(),
         }
     }
 
@@ -101,34 +99,30 @@ impl CompactOverlay {
         self.link_indicator.show(url);
     }
 
-    pub fn show_timer_finished(&mut self) {
+    pub fn show_alert(&mut self, title: String, icon_path: &str) {
         self.finish_volume_drag();
         self.finish_brightness_drag();
-        self.timer_finished.show();
+        self.alert.show(title, Path::from_svg(icon_path));
     }
 
-    pub fn clear_timer_finished(&mut self) {
-        self.timer_finished.clear();
+    pub fn update_alert(&mut self) -> bool {
+        self.alert.update()
     }
 
-    pub fn update_timer_finished(&mut self) -> bool {
-        self.timer_finished.update()
+    pub fn is_alert_visible(&self) -> bool {
+        self.alert.is_visible()
     }
 
-    pub fn is_timer_finished_visible(&self) -> bool {
-        self.timer_finished.is_visible()
+    pub fn is_alert_animating(&self) -> bool {
+        self.alert.is_animating()
     }
 
-    pub fn is_timer_finished_animating(&self) -> bool {
-        self.timer_finished.is_animating()
+    pub fn alert_close_hit(&self, x: f32, y: f32, rect: Rect, scale: f32) -> bool {
+        self.alert.hit_close(Point::new(x, y), rect, scale)
     }
 
-    pub fn timer_finished_close_hit(&self, x: f32, y: f32, rect: Rect, scale: f32) -> bool {
-        self.timer_finished.hit_close(Point::new(x, y), rect, scale)
-    }
-
-    pub fn dismiss_timer_finished(&mut self) -> bool {
-        self.timer_finished.close()
+    pub fn dismiss_alert(&mut self) -> bool {
+        self.alert.close()
     }
 
     pub fn is_link_prompt_active(&self) -> bool {
@@ -332,8 +326,8 @@ impl CompactOverlay {
     }
 
     fn active(&self) -> Option<ActiveCompactOverlay<'_>> {
-        if self.timer_finished.is_visible() {
-            Some(ActiveCompactOverlay::TimerFinished(&self.timer_finished))
+        if self.alert.is_visible() {
+            Some(ActiveCompactOverlay::Alert(&self.alert))
         } else if self.last_level_is_brightness && self.brightness_indicator.is_visible() {
             Some(ActiveCompactOverlay::Brightness(&self.brightness_indicator))
         } else if self.volume_indicator.is_visible() {

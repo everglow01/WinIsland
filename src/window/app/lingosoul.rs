@@ -13,10 +13,10 @@ use winisland_render::{Point, Rect};
 
 use super::App;
 use crate::core::assistant::{AssistantCommand, AssistantLink, AssistantRequest, AssistantState};
-use crate::core::lingosoul_install::{self, AgentProcess};
 use crate::platform::WindowRef;
 use crate::plugin::inventory::InstalledPlugin;
 use crate::ui::island::LingoSoulStyle;
+use crate::ui::island::multitask::activities::AssistantActivity;
 use crate::ui::lingosoul_chat::{ChatHit, ChatPanel};
 
 const DROP_HEIGHT: f32 = 2.9;
@@ -42,9 +42,8 @@ const PLUGIN_CALL_TIMEOUT: Duration = Duration::from_secs(25);
 const MAX_PASTE: usize = 4000;
 /// A second tap within this window counts as a double tap.
 const DOUBLE_TAP: Duration = Duration::from_millis(320);
-/// How often the island looks for a new LingoSoul release.
-const UPDATE_INTERVAL: Duration = Duration::from_secs(12 * 60 * 60);
-/// Synthetic command id for the tray item and hotkey that open the chat panel.
+const HOLD_TO_TALK: Duration = Duration::from_millis(600);
+/// Synthetic command id for the hotkey that opens the chat panel.
 pub(super) const CHAT_COMMAND: u64 = u64::MAX;
 
 pub(super) struct LingoSoulView {
@@ -58,7 +57,6 @@ pub(super) struct LingoSoulView {
     pending_tap: Option<Instant>,
     connected: bool,
     retention_sent: Option<String>,
-    history_revision: Option<u64>,
     requested: AssistantState,
     state: AssistantState,
     glass_ready: bool,
@@ -82,11 +80,9 @@ pub(super) struct LingoSoulView {
     screen_h: f32,
     ctrl: bool,
     plugin_calls: Vec<(u64, u64, Instant)>,
-    /// The agent this island started, if any.
-    process: AgentProcess,
-    autostart_tried: bool,
-    /// When the island last looked for a LingoSoul update.
-    update_checked: Option<Instant>,
+    hold: Option<(Instant, Point)>,
+    hold_fired: bool,
+    parked: Option<Instant>,
     status_revision: Option<u64>,
     reply_text: Arc<str>,
     wave_fade: f32,
@@ -112,7 +108,6 @@ impl LingoSoulView {
             pending_tap: None,
             connected: false,
             retention_sent: None,
-            history_revision: None,
             requested: AssistantState::Idle,
             state: AssistantState::Idle,
             glass_ready: false,
@@ -134,9 +129,9 @@ impl LingoSoulView {
             screen_h: 0.0,
             ctrl: false,
             plugin_calls: Vec::new(),
-            process: AgentProcess::default(),
-            autostart_tried: false,
-            update_checked: None,
+            hold: None,
+            hold_fired: false,
+            parked: None,
             status_revision: None,
             reply_text: Arc::from(""),
             wave_fade: 0.0,
@@ -179,12 +174,18 @@ impl LingoSoulView {
     }
 
     fn open_panel(&mut self) {
+        self.parked = None;
         self.panel_open = true;
         self.chat.scroll_to_end();
         self.link.set_panel_open(true);
     }
 
     fn close_panel(&mut self) {
+        self.parked = matches!(
+            self.raw,
+            AssistantState::Listening | AssistantState::Thinking | AssistantState::Speaking
+        )
+        .then(Instant::now);
         self.panel_open = false;
         self.chat.focused = false;
         self.link.set_panel_open(false);
@@ -193,6 +194,9 @@ impl LingoSoulView {
     /// What the compact island shows: nothing while expanded or while the panel hosts the
     /// exchange, and a held-back reply once the island collapses.
     fn visible_state(&mut self, raw: AssistantState, text: &Arc<str>) -> AssistantState {
+        if self.parked.is_some() {
+            return AssistantState::Idle;
+        }
         if raw == AssistantState::Replying && self.expanded && !text.is_empty() {
             self.deferred_reply = Some(text.clone());
             self.deferred_until = None;
@@ -221,17 +225,21 @@ impl LingoSoulView {
         raw
     }
 
-    pub(super) fn update(&mut self, dt: f32) {
+    pub(super) fn update(&mut self, dt: f32) -> Option<u64> {
+        let mut timer = None;
         for command in self.link.take_commands() {
             match command {
                 AssistantCommand::Timer(seconds) => {
                     log::info!("LingoSoul: timer {seconds}s");
-                    crate::ui::expanded::timer_view::start_for(seconds);
+                    timer = Some(seconds);
                 }
                 AssistantCommand::OpenChat => self.open_panel(),
             }
         }
         let snapshot = self.link.snapshot();
+        if snapshot.state == AssistantState::Listening && self.raw != AssistantState::Listening {
+            self.parked = None;
+        }
         self.raw = snapshot.state;
         if snapshot.state == AssistantState::Replying && !snapshot.text.is_empty() {
             self.reply_text = snapshot.text.clone();
@@ -327,6 +335,7 @@ impl LingoSoulView {
             self.phase += dt / 60.0 * (1.0 + 2.0 * self.level);
             self.dots += dt / 60.0;
         }
+        timer
     }
 
     /// Whether the island is showing an exchange: the drop, dots, a reply or the panel.
@@ -346,7 +355,8 @@ impl LingoSoulView {
 
     pub(super) fn is_animating(&self) -> bool {
         let moving = |spring: &Spring| spring.velocity.abs() > 0.001;
-        self.needs_backdrop()
+        self.hold.is_some()
+            || self.needs_backdrop()
             || self.requested != self.state
             || self.dots_alpha.value > 0.001
             || self.beam.value > 0.001
@@ -482,6 +492,26 @@ impl LingoSoulView {
         &self.chat
     }
 
+    pub(super) fn resume_activity(&self, now: Instant) -> Option<AssistantActivity> {
+        self.parked
+            .filter(|_| {
+                !self.panel_open
+                    && self.link.is_connected()
+                    && (self.link.has_messages() || self.raw != AssistantState::Idle)
+            })
+            .map(|since| match self.raw {
+                AssistantState::Listening | AssistantState::Thinking | AssistantState::Speaking => {
+                    AssistantActivity::Working(
+                        now.saturating_duration_since(since)
+                            .as_secs_f32()
+                            .rem_euclid(1.0)
+                            * 360.0,
+                    )
+                }
+                AssistantState::Idle | AssistantState::Replying => AssistantActivity::Available,
+            })
+    }
+
     pub(super) fn style(&self) -> LingoSoulStyle {
         LingoSoulStyle {
             drop: self.drop.value.clamp(0.0, 1.0),
@@ -504,9 +534,23 @@ impl LingoSoulView {
 }
 
 impl App {
-    /// Answers the agent's plugin requests: the plugin list, plugin commands and plugin tools.
+    pub(super) fn shutdown_assistant(&mut self) {
+        self.lingosoul.link.shutdown();
+        if let Some(host) = &self.plugin_host {
+            for (_, sequence, _) in self.lingosoul.plugin_calls.drain(..) {
+                host.runtime().extensions.cancel_assistant(sequence);
+            }
+        }
+        self.lingosoul.parked = None;
+        self.lingosoul.hold = None;
+    }
+
+    /// Answers assistant requests on the thread that owns the plugin host.
     pub(super) fn serve_assistant_requests(&mut self) {
         for AssistantRequest { id, body } in self.lingosoul.link.take_requests() {
+            if !self.lingosoul.link.request_pending(id) {
+                continue;
+            }
             match body["request"].as_str() {
                 Some("plugins") => {
                     let snapshot = self.plugin_snapshot(self.plugin_mgr.installed_plugins());
@@ -519,11 +563,11 @@ impl App {
                         .as_ref()
                         .map(|host| host.runtime().extensions.invoke(command, &[]));
                     let reply = match result {
-                        Some(Ok(())) => json!({"ok": true, "text": "已执行"}),
+                        Some(Ok(())) => json!({"ok": true, "text": "Command executed"}),
                         Some(Err(_)) => {
-                            json!({"ok": false, "text": format!("没有可用的命令 {command}")})
+                            json!({"ok": false, "text": format!("Command {command} is unavailable")})
                         }
-                        None => json!({"ok": false, "text": "插件系统没有启用"}),
+                        None => json!({"ok": false, "text": "The plugin system is unavailable"}),
                     };
                     self.lingosoul.link.reply(id, reply);
                 }
@@ -544,7 +588,7 @@ impl App {
                         )),
                         _ => self.lingosoul.link.reply(
                             id,
-                            json!({"ok": false, "text": format!("插件工具 {tool} 不可用")}),
+                            json!({"ok": false, "text": format!("Plugin tool {tool} is unavailable")}),
                         ),
                     }
                 }
@@ -564,12 +608,18 @@ impl App {
             self.lingosoul
                 .plugin_calls
                 .retain(|&(id, sequence, deadline)| {
-                    if let Some((ok, text)) = extensions.take_assistant_result(sequence) {
+                    if !link.request_pending(id) {
+                        extensions.cancel_assistant(sequence);
+                        false
+                    } else if let Some((ok, text)) = extensions.take_assistant_result(sequence) {
                         link.reply(id, json!({"ok": ok, "text": text}));
                         false
                     } else if now >= deadline {
                         extensions.cancel_assistant(sequence);
-                        link.reply(id, json!({"ok": false, "text": "插件没有及时响应"}));
+                        link.reply(
+                            id,
+                            json!({"ok": false, "text": "The plugin did not respond in time"}),
+                        );
                         false
                     } else {
                         true
@@ -674,7 +724,7 @@ impl App {
                 id: CHAT_COMMAND,
                 title: winisland_core::i18n::tr("lingosoul_chat_open"),
                 enabled: true,
-                menu: true,
+                menu: false,
                 hotkey: Some(winisland_platform::Hotkey {
                     ctrl: true,
                     alt: true,
@@ -706,71 +756,37 @@ impl App {
         }
     }
 
-    /// Stops the agent this island started, then downloads the latest release.
-    pub(super) fn install_lingosoul(&mut self) {
-        self.stop_lingosoul();
-        lingosoul_install::install_latest();
-        self.refresh_history_page();
+    #[cfg(feature = "lingosoul")]
+    pub(super) fn download_lingosoul_models(&mut self) {
+        self.lingosoul.link.download_models();
+        self.refresh_lingosoul_settings();
     }
 
-    pub(super) fn start_lingosoul(&mut self) {
-        if self.lingosoul.link.is_connected() {
-            return;
-        }
-        if let Err(error) = self.lingosoul.process.start() {
-            log::warn!("Failed to start LingoSoul: {error}");
-        }
-        self.refresh_history_page();
+    #[cfg(feature = "lingosoul")]
+    pub(super) fn cancel_lingosoul_download(&mut self) {
+        self.lingosoul.link.cancel_download();
     }
 
-    /// Asks any connected agent to exit, and ends the one this island started.
-    pub(super) fn stop_lingosoul(&mut self) {
-        self.lingosoul.link.quit();
-        self.lingosoul.process.stop();
-        self.refresh_history_page();
-    }
-
-    /// Starts the agent after an install, or once at launch when no agent is running.
-    fn manage_agent_process(&mut self) {
+    fn manage_lingosoul(&mut self) {
+        #[cfg(feature = "lingosoul")]
+        self.lingosoul
+            .link
+            .set_enabled(self.config.lingosoul_enabled);
         let revision = crate::core::assistant::status_revision();
         if self.lingosoul.status_revision != Some(revision) {
             self.lingosoul.status_revision = Some(revision);
-            self.refresh_history_page();
+            self.refresh_lingosoul_settings();
         }
-        if self.config.lingosoul_auto_update
-            && self
-                .lingosoul
-                .update_checked
-                .is_none_or(|at| at.elapsed() >= UPDATE_INTERVAL)
-            && lingosoul_install::agent_exe().is_some()
-        {
-            self.lingosoul.update_checked = Some(Instant::now());
-            lingosoul_install::check_update();
+        if !self.lingosoul.link.is_connected() {
+            self.lingosoul.parked = None;
+            if self.lingosoul.panel_open {
+                self.toggle_chat_panel(false);
+            }
         }
-        // Updating restarts the agent, so wait until it is not in a conversation.
-        if lingosoul_install::update_pending()
-            && self.lingosoul.raw == AssistantState::Idle
-            && !self.lingosoul.panel_open
-            && let Some(version) = lingosoul_install::take_update()
-        {
-            log::info!("Updating LingoSoul to {version}");
-            self.install_lingosoul();
-        }
-        if lingosoul_install::take_installed().is_some() {
-            self.lingosoul.autostart_tried = true;
-            self.start_lingosoul();
-        }
-        if !self.lingosoul.autostart_tried
-            && self.config.lingosoul_autostart
-            && crate::core::assistant::agent_absent()
-            && lingosoul_install::agent_exe().is_some()
-        {
-            self.lingosoul.autostart_tried = true;
-            self.start_lingosoul();
-        }
+        self.update_hold_to_talk();
     }
 
-    /// Tells the assistant that the settings page rewrote its config.
+    #[cfg(feature = "lingosoul")]
     pub(super) fn reload_lingosoul(&mut self) {
         self.lingosoul.link.reload();
     }
@@ -806,15 +822,14 @@ impl App {
         true
     }
 
-    /// Clears the chat history from settings; directly on disk when no assistant runs.
+    #[cfg(feature = "lingosoul")]
     pub(super) fn clear_lingosoul_history(&mut self) {
         if !self.lingosoul.link.clear() {
             crate::core::assistant::clear_history_file();
-            self.refresh_history_page();
         }
     }
 
-    fn refresh_history_page(&mut self) {
+    fn refresh_lingosoul_settings(&mut self) {
         if let Some(settings) = self.settings.as_mut() {
             settings.mark_items_dirty();
             settings.request_redraw();
@@ -823,12 +838,7 @@ impl App {
 
     /// Keeps keyboard focus and the window size in step with the panel.
     pub(super) fn sync_chat_focus(&mut self) {
-        self.manage_agent_process();
-        let revision = self.lingosoul.link.chat_revision();
-        if self.lingosoul.history_revision != Some(revision) {
-            self.lingosoul.history_revision = Some(revision);
-            self.refresh_history_page();
-        }
+        self.manage_lingosoul();
         let extended = self.lingosoul.panel_extent(&self.config).is_some();
         if extended != self.lingosoul.window_extended {
             self.lingosoul.window_extended = extended;
@@ -886,7 +896,7 @@ impl App {
             }
             ChatHit::Input => self.set_chat_focus(true),
             ChatHit::Mic => {
-                if self.lingosoul.chat.listening {
+                if self.lingosoul.chat.listening || self.lingosoul.chat.thinking {
                     self.lingosoul.link.cancel();
                 } else {
                     self.lingosoul.link.listen();
@@ -975,6 +985,9 @@ impl App {
 
     /// Routes island input to the reply card and the chat panel; true when consumed.
     pub(super) fn route_lingosoul_input(&mut self, event: &PlatformEvent) -> bool {
+        if self.route_hold_to_talk(event) {
+            return true;
+        }
         let voice_visible = !self.lingosoul.panel_open
             && !self.expanded
             && (is_drop(self.lingosoul.state) || is_drop(self.lingosoul.requested));
@@ -1058,6 +1071,90 @@ impl App {
             window.request_redraw();
         }
         consumed
+    }
+
+    fn route_hold_to_talk(&mut self, event: &PlatformEvent) -> bool {
+        match event {
+            PlatformEvent::MouseInput {
+                state: InputState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } if cfg!(feature = "lingosoul")
+                && self.config.lingosoul_hold_to_talk
+                && self.config.lingosoul_enabled
+                && self.lingosoul.link.is_connected()
+                && !self.expanded
+                && !self.springs.expanded_target
+                && (self.springs.h.value - self.compact_content_height()).abs()
+                    < 2.0 * self.config.compact_scale
+                && !self.lingosoul.is_active()
+                && !self.is_hidden()
+                && !self.components_hidden
+                && !self.compact_overlay.is_visible() =>
+            {
+                let (x, y) = crate::utils::mouse::get_global_cursor_pos();
+                let point = Point::new((x - self.geom.win_x) as f32, (y - self.geom.win_y) as f32);
+                if self.chat_island_rect().contains(point) {
+                    self.lingosoul.hold = Some((Instant::now(), Point::new(x as f32, y as f32)));
+                }
+            }
+            PlatformEvent::MouseInput {
+                state: InputState::Released,
+                button: MouseButton::Left,
+                ..
+            } => {
+                self.lingosoul.hold = None;
+                if std::mem::take(&mut self.lingosoul.hold_fired) {
+                    self.is_dragging = false;
+                    self.drag_axis = None;
+                    return true;
+                }
+            }
+            PlatformEvent::Focused { focused: false, .. } => {
+                self.lingosoul.hold = None;
+                self.lingosoul.hold_fired = false;
+            }
+            _ => {}
+        }
+        false
+    }
+
+    fn update_hold_to_talk(&mut self) {
+        let Some((started, origin)) = self.lingosoul.hold else {
+            return;
+        };
+        let (x, y) = crate::utils::mouse::get_global_cursor_pos();
+        let threshold = (8.0 * self.config.compact_scale).max(6.0);
+        let point = Point::new((x - self.geom.win_x) as f32, (y - self.geom.win_y) as f32);
+        if self.expanded
+            || self.springs.expanded_target
+            || self.lingosoul.panel_open
+            || !self.config.lingosoul_enabled
+            || !self.config.lingosoul_hold_to_talk
+            || self.drag_has_moved
+            || self.drag_axis.is_some()
+            || !crate::utils::mouse::is_left_button_pressed()
+            || !self.chat_island_rect().contains(point)
+            || (x as f32 - origin.x).abs() > threshold
+            || (y as f32 - origin.y).abs() > threshold
+        {
+            self.lingosoul.hold = None;
+            return;
+        }
+        if started.elapsed() < HOLD_TO_TALK {
+            return;
+        }
+        self.lingosoul.hold = None;
+        self.lingosoul.hold_fired = true;
+        self.lingosoul.parked = None;
+        self.lingosoul.pending_tap = None;
+        self.is_dragging = false;
+        self.drag_axis = None;
+        if self.lingosoul.link.voice_available() {
+            self.lingosoul.link.listen();
+        } else {
+            self.open_chat_panel();
+        }
     }
 }
 

@@ -16,6 +16,7 @@ pub struct NativeSurface {
     tag: u32,
     handle: usize,
     keepalive: Option<Arc<dyn Any + Send + Sync>>,
+    redraw: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl NativeSurface {
@@ -25,7 +26,18 @@ impl NativeSurface {
             tag: SURFACE_TAG_WIN32_HWND,
             handle: hwnd,
             keepalive,
+            redraw: None,
         }
+    }
+
+    /// Installs a redraw notification that can run on a worker thread and must not block or panic.
+    pub fn with_redraw_callback(mut self, redraw: Arc<dyn Fn() + Send + Sync>) -> Self {
+        self.redraw = Some(redraw);
+        self
+    }
+
+    pub fn redraw_callback(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
+        self.redraw.clone()
     }
 
     /// Returns the backend tag without transferring ownership.
@@ -133,14 +145,9 @@ pub trait WindowSystem {
     /// Shapes the window backdrop as a rounded rectangle in client physical pixels; false means
     /// absent, and an update error releases it.
     fn update_window_backdrop(&self, id: WindowId, rect: [f32; 4], radius: f32) -> bool;
-    /// Starts screen sampling beneath an overlay on the adapter with `adapter_luid`, excluding the
-    /// overlay from all screen captures until stopped; unavailable support returns an error.
-    fn start_backdrop_capture(
-        &self,
-        id: WindowId,
-        adapter_luid: u64,
-        visible_to_capture: bool,
-    ) -> Result<(), PlatformError>;
+    /// Starts screen sampling beneath an overlay on the adapter with `adapter_luid`, excluding
+    /// the overlay only from its own background source; unavailable support returns an error.
+    fn start_backdrop_capture(&self, id: WindowId, adapter_luid: u64) -> Result<(), PlatformError>;
     /// Copies the newest screen content into the shared texture; `None` means no capture is
     /// running or no frame has arrived yet.
     fn update_backdrop_capture(

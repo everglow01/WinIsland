@@ -1,9 +1,9 @@
 use std::time::{Duration, Instant};
 
-use pollkit::Every;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 use winisland_platform::{MediaCommand, MediaContext};
+use winisland_utils::poll::Every;
 
 use winisland_core::lyrics::LyricsMode;
 
@@ -21,6 +21,7 @@ pub(super) struct WorkerChannels {
     pub(super) playback_rx: mpsc::UnboundedReceiver<PlaybackCommand>,
     pub(super) lyrics_mode_rx: mpsc::UnboundedReceiver<LyricsMode>,
     pub(super) lyrics_source_rx: mpsc::UnboundedReceiver<String>,
+    pub(super) lyrics_fuzzy_search_rx: mpsc::UnboundedReceiver<bool>,
     pub(super) lyrics_local_dir_rx: mpsc::UnboundedReceiver<Option<String>>,
     pub(super) show_secondary_lyrics_rx: mpsc::UnboundedReceiver<bool>,
     pub(super) allowed_apps_rx: mpsc::UnboundedReceiver<Vec<String>>,
@@ -38,6 +39,7 @@ pub(super) fn smtc_poll_loop(channels: WorkerChannels, cancel: CancellationToken
         mut playback_rx,
         mut lyrics_mode_rx,
         mut lyrics_source_rx,
+        mut lyrics_fuzzy_search_rx,
         mut lyrics_local_dir_rx,
         mut show_secondary_lyrics_rx,
         mut allowed_apps_rx,
@@ -59,6 +61,7 @@ pub(super) fn smtc_poll_loop(channels: WorkerChannels, cancel: CancellationToken
 
     let mut current_lyrics_mode = LyricsMode::Online;
     let mut current_lyrics_source = "163".to_string();
+    let mut current_fuzzy_search = false;
     let mut current_lyrics_local_dir: Option<String> = None;
     let mut current_show_secondary_lyrics = false;
     let mut current_allowed_apps: Vec<String> = Vec::new();
@@ -68,6 +71,9 @@ pub(super) fn smtc_poll_loop(channels: WorkerChannels, cancel: CancellationToken
     }
     while let Ok(src) = lyrics_source_rx.try_recv() {
         current_lyrics_source = src;
+    }
+    while let Ok(fuzzy) = lyrics_fuzzy_search_rx.try_recv() {
+        current_fuzzy_search = fuzzy;
     }
     while let Ok(dir) = lyrics_local_dir_rx.try_recv() {
         current_lyrics_local_dir = dir;
@@ -102,6 +108,7 @@ pub(super) fn smtc_poll_loop(channels: WorkerChannels, cancel: CancellationToken
                     source: &current_lyrics_source,
                     local_dir: current_lyrics_local_dir.as_deref(),
                     show_secondary: current_show_secondary_lyrics,
+                    fuzzy_search: current_fuzzy_search,
                     bridge: lyrics_bridge.as_ref(),
                 },
                 true,
@@ -142,6 +149,12 @@ pub(super) fn smtc_poll_loop(channels: WorkerChannels, cancel: CancellationToken
                 lyrics_settings_changed = true;
             }
         }
+        while let Ok(fuzzy) = lyrics_fuzzy_search_rx.try_recv() {
+            if fuzzy != current_fuzzy_search {
+                current_fuzzy_search = fuzzy;
+                lyrics_settings_changed = true;
+            }
+        }
         while let Ok(dir) = lyrics_local_dir_rx.try_recv() {
             if dir != current_lyrics_local_dir {
                 current_lyrics_local_dir = dir;
@@ -168,6 +181,7 @@ pub(super) fn smtc_poll_loop(channels: WorkerChannels, cancel: CancellationToken
                 &current_lyrics_source,
                 current_lyrics_local_dir.as_deref(),
                 current_show_secondary_lyrics,
+                current_fuzzy_search,
                 lyrics_bridge.as_ref(),
             );
         }
@@ -257,6 +271,7 @@ pub(super) fn smtc_poll_loop(channels: WorkerChannels, cancel: CancellationToken
                     source: &current_lyrics_source,
                     local_dir: current_lyrics_local_dir.as_deref(),
                     show_secondary: current_show_secondary_lyrics,
+                    fuzzy_search: current_fuzzy_search,
                     bridge: lyrics_bridge.as_ref(),
                 },
                 true,
@@ -275,6 +290,7 @@ pub(super) fn smtc_poll_loop(channels: WorkerChannels, cancel: CancellationToken
                     source: &current_lyrics_source,
                     local_dir: current_lyrics_local_dir.as_deref(),
                     show_secondary: current_show_secondary_lyrics,
+                    fuzzy_search: current_fuzzy_search,
                     bridge: lyrics_bridge.as_ref(),
                 },
                 do_auto_allow,
@@ -401,6 +417,7 @@ fn refresh_current_lyrics(
     lyrics_source: &str,
     local_dir: Option<&str>,
     show_secondary: bool,
+    fuzzy_search: bool,
     lyrics_bridge: Option<&winisland_plugin_host::lifecycle::LyricsBridge>,
 ) {
     let mut request = None;
@@ -432,6 +449,7 @@ fn refresh_current_lyrics(
             source: lyrics_source.to_string(),
             local_dir: local_dir.map(str::to_string),
             show_secondary,
+            fuzzy_search,
             request_id,
             track_id,
         },

@@ -3,6 +3,7 @@ use winisland_plugin_api::types::v2::context::HostStateV2;
 use winisland_plugin_host::host::MediaSnapshot;
 
 use super::App;
+use super::activities::SecondaryIndicator;
 
 impl App {
     pub(super) fn update_v2_album_art(&self, cover: Option<&[u8]>, hash: u64) {
@@ -36,14 +37,41 @@ impl App {
         for id in self.v2_activity_ids.difference(&current_ids) {
             changed |= self.activity_mgr.remove(*id);
         }
+        self.v2_secondary.clear();
         for activity in activities {
-            changed |= self.activity_mgr.upsert(activity);
+            if activity.secondary {
+                self.v2_secondary.push(activity);
+            } else {
+                changed |= self.activity_mgr.upsert(activity);
+            }
         }
         self.v2_activity_ids = current_ids;
         self.v2_activity_revision = revision;
         if changed {
             self.resize_activity_window();
         }
+        changed
+    }
+
+    /// Keeps secondary activities off the compact island while other content occupies it.
+    pub(super) fn update_secondary_activities(&mut self) -> bool {
+        let mut changed = false;
+        let mut indicator = None;
+        for activity in &self.v2_secondary {
+            if self.compact_island_shared(activity.id) {
+                if indicator.is_none() {
+                    indicator = activity.progress.map(|progress| SecondaryIndicator {
+                        page: activity.page,
+                        progress,
+                    });
+                }
+                changed |= self.activity_mgr.remove(activity.id);
+            } else {
+                changed |= self.activity_mgr.upsert(activity.clone());
+            }
+        }
+        changed |= self.secondary_indicator.is_some() != indicator.is_some();
+        self.secondary_indicator = indicator;
         changed
     }
 
@@ -132,7 +160,7 @@ impl App {
             return;
         };
         for id in &self.v2_widget_ids {
-            match host.prepare_widget_frame(*id) {
+            match host.prepare_widget_frame(*id, self.plugin_frames.get(id)) {
                 Ok(Some(frame)) => {
                     self.plugin_frames.insert(*id, frame);
                 }

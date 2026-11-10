@@ -1,0 +1,281 @@
+uniform shader backdrop;
+
+uniform float2 corner0;
+uniform float4 shape1;
+uniform float2 corner1;
+uniform float smoothing;
+
+uniform float bezelWidth;
+uniform float thickness;
+uniform float glassIor;
+uniform float displacementFactor;
+uniform float dispersion;
+uniform float morphDispersion;
+uniform float progress;
+uniform float4 tint;
+uniform float legibility;
+
+uniform float2 lightDir;
+uniform float4 specular;
+uniform float2 specularShape;
+
+uniform float3 stroke;
+uniform float3 border;
+uniform float4 shadow;
+uniform float shadowAlpha;
+uniform float shadowRing;
+uniform float opacity;
+uniform float blackFade;
+
+const float kEpsilon = 0.0001;
+const float kUnionDepth = 0.25;
+const float kMaxSlope = 11.430052;
+const float kEdgeOffset = 0.7;
+const float kEdgeSoftness = 0.6;
+const float kHighlightSideLevel = 0.45;
+
+float roundRect(float2 p, float4 s, float2 c, out float2 g) {
+    float2 sgn = float2(p.x < s.x ? -1.0 : 1.0, p.y < s.y ? -1.0 : 1.0);
+    float2 q = abs(p - s.xy) - s.zw + c.x;
+    if (q.x > 0.0 && q.y > 0.0) {
+        float2 m = q / c.x;
+        float2 mp = pow(m, float2(c.y - 1.0));
+        g = normalize(mp) * sgn;
+        return (pow(mp.x * m.x + mp.y * m.y, 1.0 / c.y) - 1.0) * c.x;
+    }
+    g = q.x > q.y ? float2(sgn.x, 0.0) : float2(0.0, sgn.y);
+    return max(q.x, q.y) - c.x;
+}
+
+float scene(float2 p, out float2 g) {
+    float2 g0;
+    float d0 = roundRect(p, shape0, corner0, g0);
+    if (lingosoul.w > 0.0) {
+        float2 halfSize = max(shape0.zw, float2(1.0));
+        float2 local = (p - shape0.xy) / halfSize;
+        float2 q = abs(local);
+        float power = 2.4;
+        float radial = pow(pow(q.x, power) + pow(q.y, power), 1.0 / power);
+        float2 derivative = pow(q, float2(power - 1.0)) / halfSize;
+        float magnitude = length(derivative);
+        float oval = magnitude > kEpsilon
+            ? (radial - 1.0) * pow(radial, power - 1.0) / magnitude
+            : -min(halfSize.x, halfSize.y);
+        float2 ovalGradient = magnitude > kEpsilon
+            ? derivative * sign(local) / magnitude : g0;
+        d0 = mix(d0, oval, lingosoul.w);
+        g0 = normalize(mix(g0, ovalGradient, lingosoul.w));
+    }
+    if (shape1.z <= 0.0) {
+        g = g0;
+        return d0;
+    }
+    float2 g1;
+    float d1 = roundRect(p, shape1, corner1, g1);
+    float h = smoothing > kEpsilon ? clamp(1.0 - abs(d0 - d1) / smoothing, 0.0, 1.0) : 0.0;
+    if (h <= kEpsilon) {
+        g = d0 <= d1 ? g0 : g1;
+        return min(d0, d1);
+    }
+    float w = clamp(2.0 * kUnionDepth * h, 0.0, 1.0);
+    float left = d0 <= d1 ? 1.0 - w : w;
+    float2 blended = g0 * left + g1 * (1.0 - left);
+    float len = length(blended);
+    g = len > kEpsilon ? blended / len : float2(0.0, -1.0);
+    return min(d0, d1) - smoothing * kUnionDepth * h * h;
+}
+
+float3 background(float2 c) {
+    return float3(backdrop.eval(c).rgb);
+}
+
+float2 lingosoulFloor(float2 p, float d, float2 g) {
+    float height = max(shape0.w * 2.0, 1.0);
+    float lower = smoothstep(-0.3, 0.45, g.y);
+    float contour = exp(-pow((d - 0.7) / 0.9, 2.0)) * 0.24 * lower;
+    float nx = (p.x - shape0.x) / max(shape0.z * 1.7, 1.0) + 0.5;
+    float spindle = pow(max(sin(clamp(nx, 0.0, 1.0) * 3.14159265), 0.0), 2.2);
+    float energy = smoothstep(0.015, 0.6, lingosoul.z);
+    float pulse = 1.0 + 0.12 * sin(lingosoulWave.y * 1.5);
+    float depth = max(d - 1.6, 0.0) / (height * (0.07 + 0.03 * energy));
+    float caustic = spindle * smoothstep(0.8, 2.2, d) * exp(-depth * depth)
+        * smoothstep(0.2, 0.7, g.y) * lingosoul.x * (0.7 + 0.3 * energy) * pulse;
+    return float2(contour, clamp(caustic, 0.0, 1.0));
+}
+
+// How much of the shadow is a ring rather than a filled drop; LingoSoul's drop keeps a filled floor.
+float shadowRingWeight() {
+    return shadowRing * (1.0 - lingosoul.w);
+}
+
+// A ring shadow follows the offset silhouette and lies behind the glass, so it is also seen through it.
+float shadowMask(float2 p) {
+    float2 unused;
+    float ds = scene(p - shadow.xy, unused) - shadow.w;
+    float r = max(shadow.z, 0.5);
+    float filled = 1.0 - smoothstep(-r, r, ds);
+    float ring = exp(-ds * ds / (r * r));
+    return mix(filled, ring, shadowRingWeight());
+}
+
+float underlay(float2 p, float d, float2 g, float coverage) {
+    float strokeA = 0.0;
+    if (stroke.y > 0.0) {
+        float outset = max(stroke.x * g.x * g.x + stroke.z * max(g.y, 0.0), 0.0);
+        strokeA = clamp((1.0 - smoothstep(outset - 0.5, outset + 0.5, d)) * smoothstep(-0.5, 0.5, d), 0.0, 1.0)
+            * stroke.y * coverage;
+    }
+    float shadowA = 0.0;
+    if (shadowAlpha > 0.0) {
+        shadowA = shadowMask(p) * shadowAlpha * coverage;
+        if (lingosoul.w > 0.0) {
+            shadowA = min(shadowA + lingosoulFloor(p, d, g).x * coverage * lingosoul.w, 1.0);
+        }
+    }
+    return strokeA + shadowA * (1.0 - strokeA);
+}
+
+// LingoSoul glass and spindle waves ported from https://github.com/neeldedkawala/ios-siri-animation
+// Copyright (c) 2026 Neel Dedkawala. MIT license: ../../licenses/ios-siri-animation-LICENSE.
+const float kLingoSoulBezel = 58.0;
+const float kLingoSoulThickness = 31.0;
+const float kLingoSoulIor = 3.05;
+const float kLingoSoulDispersion = 2.0;
+const float kLingoSoulCurvature = 8.0;
+const float kLingoSoulScaleRatio = 3.8;
+const float kLingoSoulRimWidth = 1.4;
+const float kLingoSoulRimIntensity = 0.97;
+
+float lingosoulSnell(float d, float bezel, float thickness, float n, out float height) {
+    if (d >= bezel || d <= 0.0) {
+        height = d <= 0.0 ? 0.0 : thickness;
+        return 0.0;
+    }
+    float u = clamp(d / max(bezel, 1.0), 0.0, 1.0);
+    float innerArc = clamp(1.0 - pow(1.0 - u, kLingoSoulCurvature), 0.0, 1.0);
+    height = thickness * sqrt(innerArc);
+    float denom = max(sqrt(innerArc), 0.05);
+    float slope = (thickness / max(bezel, 1.0)) * (pow(1.0 - u, kLingoSoulCurvature - 1.0) / denom);
+    float theta1 = atan(slope);
+    float theta2 = asin(clamp(sin(theta1) / max(n, 1.001), -0.999, 0.999));
+    return height * tan(theta1 - theta2);
+}
+
+float3 lingosoulBody(float2 p, float inward, float2 g) {
+    float progress = lingosoul.w;
+    float unit = max(shape0.z, 1.0) / kLingoSoulUnitWidth;
+    float2 local = p - shape0.xy;
+    float halfHeight = max(shape0.w, 1.0);
+    float dispersion = kLingoSoulDispersion * 0.15;
+    float height;
+    float bezel = kLingoSoulBezel * unit;
+    float thickness = kLingoSoulThickness * unit;
+    float shiftR = lingosoulSnell(inward, bezel, thickness, kLingoSoulIor - dispersion * 0.04, height);
+    float shiftG = lingosoulSnell(inward, bezel, thickness, kLingoSoulIor, height);
+    float shiftB = lingosoulSnell(inward, bezel, thickness, kLingoSoulIor + dispersion * 0.07, height);
+    float scale = kLingoSoulScaleRatio * progress;
+    float3 refracted = float3(
+        background(p - g * shiftR * scale).r,
+        background(p - g * shiftG * scale).g,
+        background(p - g * shiftB * scale).b);
+    float yRatio = clamp((local.y + halfHeight * 0.15) / (halfHeight * 1.15), 0.0, 1.0);
+    float translucency = smoothstep(0.18, 0.92, yRatio) * progress;
+    float3 body = mix(float3(0.0), refracted, translucency);
+    body += lingosoulWaves(local, g, inward, unit);
+    float bottomFactor = clamp((local.y + halfHeight * 0.25) / (halfHeight * 1.25), 0.0, 1.0);
+    float rim = smoothstep(max(kLingoSoulRimWidth * unit, 0.1), 0.0, inward) * bottomFactor * progress;
+    float behind = dot(refracted, float3(0.2126, 0.7152, 0.0722));
+    body += float3(0.96, 0.98, 1.0) * rim * kLingoSoulRimIntensity * 0.7 * mix(0.3, 1.0, smoothstep(0.15, 0.7, behind));
+    return clamp(body, 0.0, 1.0);
+}
+
+half4 shade(float2 p, float d, float2 g, float t, float pulse, float coverage) {
+    float softness = mix(kEdgeSoftness, max(1.0, shape0.w * 0.018), lingosoul.w);
+    float fill = 1.0 - smoothstep(kEdgeOffset - softness, kEdgeOffset + softness, d);
+    float under = fill < 1.0 ? underlay(p, d, g, coverage) : 0.0;
+    if (fill <= 0.0) {
+        if (lingosoul.w > 0.0) {
+            float floorLuma = dot(background(p), float3(0.2126, 0.7152, 0.0722));
+            float light = lingosoulFloor(p, d, g).y * lingosoul.w * coverage * 0.5 * smoothstep(0.2, 0.75, floorLuma);
+            return half4(half3(float3(1.0, 0.97, 0.9) * light * opacity), half((light + under * (1.0 - light)) * opacity));
+        }
+        return half4(0.0, 0.0, 0.0, half(under * opacity));
+    }
+
+    float inward = max(-d, 0.0);
+    float band = clamp(inward / max(bezelWidth, 1.0), 0.0, 1.0);
+    float2 shift = float2(0.0);
+    if (inward < bezelWidth && displacementFactor != 0.0) {
+        float u = 1.0 - band;
+        float u2 = u * u;
+        float slope = min(2.0 * u2 * u / sqrt(max(1.0 - u2 * u2, kEpsilon)), kMaxSlope);
+        float3 normal = normalize(float3(g * slope, 1.0));
+        float3 ray = refract(float3(0.0, 0.0, -1.0), normal, 1.0 / max(glassIor, 1.0001));
+        if (ray.z < 0.0) {
+            shift = ray.xy / -ray.z * (thickness + inward * 0.5) * displacementFactor;
+            shift *= t + 7.0 * t * (1.0 - t);
+        }
+    }
+
+    float spread = dispersion + morphDispersion * pulse;
+    float3 glass;
+    if (dot(shift, shift) < 0.0025) {
+        glass = background(p);
+    } else if (spread < 0.001) {
+        glass = background(p + shift);
+    } else {
+        glass = float3(
+            background(p + shift * (1.0 + spread)).r,
+            background(p + shift).g,
+            background(p + shift * (1.0 - spread)).b);
+    }
+    float ringWeight = shadowRingWeight();
+    if (shadowAlpha > 0.0 && ringWeight > 0.0) {
+        glass *= 1.0 - shadowMask(p) * shadowAlpha * coverage * ringWeight;
+    }
+    float luma = dot(glass, float3(0.2126, 0.7152, 0.0722));
+    float tintAmount = min(tint.a + legibility * smoothstep(0.35, 0.95, luma), 1.0);
+    glass = mix(glass, tint.rgb, tintAmount * coverage);
+    if (blackFade > 0.0) {
+        float top = shape0.y - shape0.w;
+        float height = clamp((p.y - top) / max(shape0.w * 2.0, 1.0), 0.0, 1.0);
+        float black = 1.0 - smoothstep(0.15, 0.85, height);
+        glass = mix(glass, float3(0.0), blackFade * black);
+    }
+    if (lingosoul.w > 0.0) {
+        glass = mix(glass, lingosoulBody(p, inward, g), lingosoul.w);
+    }
+    // The outline spans border.x pixels inward from the silhouette edge at kEdgeOffset.
+    float outlineInner = kEdgeOffset - border.x;
+    if (border.y > 0.0) {
+        float ring = smoothstep(outlineInner - 0.5, outlineInner + 0.5, d);
+        glass = mix(glass, float3(border.z), ring * border.y * coverage);
+    }
+    // The highlight sits just inside the outline so the outline stays the outermost edge.
+    float rim = 1.0 - smoothstep(0.0, max(specularShape.x, 0.25), abs(d - outlineInner + specularShape.x * 0.5));
+    if (rim > 0.0) {
+        float falloff = specular.w * band * band;
+        // Brightest mid-edge, dimming toward the sides but still wrapping into the corners.
+        float across = clamp(abs(p.x - shape0.x) / max(shape0.z, 1.0), 0.0, 1.0);
+        float sides = mix(1.0, kHighlightSideLevel, smoothstep(0.1, 1.0, across));
+        float lit = pow(max(dot(g, lightDir), 0.0), specularShape.y) * max(specular.x - falloff, 0.0);
+        float opposite = pow(max(dot(g, -lightDir), 0.0), specularShape.y) * max(specular.y - falloff, 0.0);
+        glass += clamp((lit + opposite) * rim * sides, 0.0, 1.0) * specular.z * min(coverage + pulse * 0.85, 1.75);
+    }
+
+    float alpha = fill + under * (1.0 - fill);
+    return half4(half3(glass * fill * opacity), half(alpha * opacity));
+}
+
+half4 main(float2 p) {
+    float t = clamp(progress, 0.0, 1.0);
+    if (t <= 0.0) {
+        return half4(0.0);
+    }
+    float pulse = 4.0 * t * (1.0 - t);
+    float coverage = smoothstep(0.0, 0.55, t);
+
+    float2 g;
+    float d = scene(p, g);
+    return shade(p, d, g, t, pulse, coverage);
+}

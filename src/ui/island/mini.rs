@@ -62,7 +62,6 @@ pub(crate) fn lyric_pair_height(font_size: f32, global_scale: f32) -> f32 {
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum MiniContent<'a> {
     Music,
-    Timer(crate::ui::compact::timer::TimerContent),
     Text(&'a ActivityText),
     Surface(u64),
 }
@@ -82,8 +81,10 @@ pub(super) struct MiniContentParams<'a> {
     pub(super) spectrum_fill: &'a SpectrumFill,
     pub(super) viz_h_scale: f32,
     pub(super) current_lyric: &'a str,
+    pub(super) current_font_family: Option<&'a str>,
     pub(super) current_secondary_lyric: &'a str,
     pub(super) old_lyric: &'a str,
+    pub(super) old_font_family: Option<&'a str>,
     pub(super) old_secondary_lyric: &'a str,
     pub(super) lyric_highlight: Option<LyricHighlight>,
     pub(super) expansion_progress: f32,
@@ -107,18 +108,6 @@ pub(super) fn draw_mini_content(params: MiniContentParams<'_>) {
     let alpha = scaled_alpha(u8::MAX, params.mini_alpha);
     match content {
         MiniContent::Music => draw_music_content(&params, alpha),
-        MiniContent::Timer(timer) => crate::ui::compact::timer::draw_countdown(
-            params.painter,
-            timer,
-            Rect::from_xywh(
-                params.offset_x,
-                params.stable_offset_y,
-                params.current_w,
-                params.base_h,
-            ),
-            params.global_scale,
-            params.mini_alpha,
-        ),
         MiniContent::Text(context) => draw_plugin_content(&params, context, alpha),
         MiniContent::Surface(id) => {
             if let Some(host) = params.plugin_host {
@@ -303,6 +292,7 @@ fn draw_lyric_transition(
         draw_lyric_pair(LyricPairParams {
             painter: params.painter,
             primary: params.old_lyric,
+            font_family: params.old_font_family,
             secondary: params.old_secondary_lyric,
             primary_anchor_x: layout.primary_anchor_x,
             secondary_center_x: layout.secondary_center_x,
@@ -325,6 +315,7 @@ fn draw_lyric_transition(
     draw_lyric_pair(LyricPairParams {
         painter: params.painter,
         primary: params.current_lyric,
+        font_family: params.current_font_family,
         secondary: params.current_secondary_lyric,
         primary_anchor_x: layout.primary_anchor_x,
         secondary_center_x: layout.secondary_center_x,
@@ -427,6 +418,7 @@ fn scaled_alpha(alpha: u8, factor: f32) -> u8 {
 struct LyricPairParams<'a> {
     painter: Painter<'a>,
     primary: &'a str,
+    font_family: Option<&'a str>,
     secondary: &'a str,
     primary_anchor_x: f32,
     secondary_center_x: f32,
@@ -442,6 +434,7 @@ fn draw_lyric_pair(params: LyricPairParams<'_>) {
     let LyricPairParams {
         painter,
         primary,
+        font_family,
         secondary,
         primary_anchor_x,
         secondary_center_x,
@@ -466,30 +459,26 @@ fn draw_lyric_pair(params: LyricPairParams<'_>) {
     } else {
         center_y + secondary_size / 3.0
     };
-    let text_x = |text: &str, text_size: f32, weight: FontWeight, anchor_x: f32, centered: bool| {
-        if centered {
-            let width = FontManager::global().measure_text_cached(text, text_size, weight);
-            anchor_x - width / 2.0
-        } else {
-            anchor_x
-        }
-    };
+    let font_manager = FontManager::for_family(font_family);
 
     if !primary.is_empty() {
         draw_highlighted_lyric(
-            painter,
-            primary,
-            text_x(
-                primary,
+            &font_manager,
+            DrawTextCachedParams {
+                painter,
+                text: primary,
+                x: if primary_centered {
+                    primary_anchor_x
+                        - font_manager.measure_text_cached(primary, size, LYRIC_WEIGHT) / 2.0
+                } else {
+                    primary_anchor_x
+                },
+                y: primary_y,
                 size,
-                LYRIC_WEIGHT,
-                primary_anchor_x,
-                primary_centered,
-            ),
-            primary_y,
-            size,
-            color,
-            blur,
+                weight: LYRIC_WEIGHT,
+                color,
+                blur,
+            },
             highlight,
         );
     }
@@ -503,13 +492,12 @@ fn draw_lyric_pair(params: LyricPairParams<'_>) {
         draw_text_cached(DrawTextCachedParams {
             painter,
             text: secondary,
-            x: text_x(
-                secondary,
-                secondary_size,
-                FontWeight::REGULAR,
-                secondary_center_x,
-                true,
-            ),
+            x: secondary_center_x
+                - FontManager::global().measure_text_cached(
+                    secondary,
+                    secondary_size,
+                    FontWeight::REGULAR,
+                ) / 2.0,
             y: secondary_y,
             size: secondary_size,
             weight: FontWeight::REGULAR,
@@ -519,28 +507,22 @@ fn draw_lyric_pair(params: LyricPairParams<'_>) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn draw_highlighted_lyric(
-    painter: Painter<'_>,
-    text: &str,
-    x: f32,
-    y: f32,
-    size: f32,
-    active_color: Rgba,
-    blur: Option<BlurSpec>,
+    font_manager: &FontManager<'_>,
+    params: DrawTextCachedParams<'_>,
     highlight: Option<LyricHighlight>,
 ) {
+    let DrawTextCachedParams {
+        painter,
+        text,
+        x,
+        y,
+        size,
+        color: active_color,
+        ..
+    } = params;
     let draw = |color: Rgba| {
-        draw_text_cached(DrawTextCachedParams {
-            painter,
-            text,
-            x,
-            y,
-            size,
-            weight: LYRIC_WEIGHT,
-            color,
-            blur,
-        });
+        font_manager.draw_text_cached(DrawTextCachedParams { color, ..params });
     };
     let Some(highlight) = highlight.filter(|highlight| {
         highlight.start_byte <= highlight.end_byte
@@ -559,7 +541,6 @@ fn draw_highlighted_lyric(
         PENDING_LYRIC_CHANNEL,
     ));
 
-    let font_manager = FontManager::global();
     let style = LYRIC_WEIGHT;
     let (completed_width, active_width) = font_manager.measure_text_prefixes_cached(
         text,

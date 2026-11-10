@@ -1,0 +1,8 @@
+uniform float opacity;
+
+half4 main(float2 p) {
+    float unit = max(shape0.z, 1.0) / kLingoSoulUnitWidth;
+    float3 color = clamp(lingosoulWaves(p - shape0.xy, float2(0.0), 0.0, unit), 0.0, 1.0);
+    float alpha = max(color.r, max(color.g, color.b));
+    return half4(half3(color * opacity), half(alpha * opacity));
+}

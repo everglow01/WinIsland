@@ -4,16 +4,33 @@ pub(crate) use device::StatusIndicators;
 
 use winisland_render::{Painter, Rect};
 
+/// The countdown a plugin activity publishes for the host-drawn compact indicator.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Indicator {
+    pub progress: f32,
+    pub paused: bool,
+    pub page: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum AssistantActivity {
+    Working(f32),
+    Available,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Activity {
     Status {
         camera: f32,
         microphone: f32,
-        timer: f32,
+        indicator: f32,
         plugin: f32,
+        assistant: f32,
+        assistant_activity: AssistantActivity,
         shared: f32,
-        timer_progress: f32,
-        timer_paused: bool,
+        indicator_progress: f32,
+        indicator_paused: bool,
+        indicator_page: Option<u64>,
         plugin_surface: Option<u64>,
     },
 }
@@ -25,9 +42,21 @@ impl Activity {
         }
     }
 
-    pub(crate) fn has_timer(self) -> bool {
+    pub(crate) fn has_indicator(self) -> bool {
         match self {
-            Self::Status { timer, .. } => timer > 0.5,
+            Self::Status { indicator, .. } => indicator > 0.5,
+        }
+    }
+
+    pub(crate) fn indicator_page(self) -> Option<u64> {
+        match self {
+            Self::Status { indicator_page, .. } => indicator_page,
+        }
+    }
+
+    pub(crate) fn has_assistant(self) -> bool {
+        match self {
+            Self::Status { assistant, .. } => assistant > 0.5,
         }
     }
 
@@ -49,9 +78,11 @@ impl Activity {
             Self::Status {
                 camera,
                 microphone,
-                timer,
-                timer_progress,
-                timer_paused,
+                indicator,
+                indicator_progress,
+                indicator_paused,
+                assistant,
+                assistant_activity,
                 ..
             } => device::draw(
                 painter,
@@ -61,9 +92,11 @@ impl Activity {
                 device::Indicators {
                     camera,
                     microphone,
-                    timer,
-                    timer_progress,
-                    timer_paused,
+                    indicator,
+                    indicator_progress,
+                    indicator_paused,
+                    assistant,
+                    assistant_activity,
                 },
             ),
         }

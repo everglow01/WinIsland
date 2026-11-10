@@ -21,6 +21,31 @@ pub enum ActivityContent {
     Surface(u64),
 }
 
+/// A countdown a plugin publishes for the host-drawn compact indicator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActivityProgress {
+    pub remaining_ms: u64,
+    pub total_ms: u64,
+    pub paused: bool,
+    pub sampled_at: Instant,
+}
+
+impl ActivityProgress {
+    /// The remaining share of the countdown, advancing in real time while it runs.
+    pub fn fraction(&self, now: Instant) -> f32 {
+        if self.total_ms == 0 {
+            return 0.0;
+        }
+        let elapsed = if self.paused {
+            0
+        } else {
+            now.saturating_duration_since(self.sampled_at).as_millis() as u64
+        };
+        let remaining = self.remaining_ms.saturating_sub(elapsed);
+        (remaining as f32 / self.total_ms as f32).clamp(0.0, 1.0)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Activity {
     pub id: u64,
@@ -28,6 +53,10 @@ pub struct Activity {
     pub content: ActivityContent,
     pub show_compact: bool,
     pub keep_visible: bool,
+    /// Yields the compact island to any other activity or compact content.
+    pub secondary: bool,
+    /// Countdown shown by the host's compact indicator while this activity is not the island content.
+    pub progress: Option<ActivityProgress>,
     pub preferred_width: f32,
     pub preferred_height: f32,
     pub page: Option<u64>,

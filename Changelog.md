@@ -1,5 +1,22 @@
 # Changelog
 
+### v2.0.1
+- LingoSoul is now built into WinIsland. Configure your AI endpoint for text chat and download speech models when needed, without installing a separate assistant
+- Added an option to wake LingoSoul by holding the left mouse button on the compact island; text chat is available when speech models or a microphone are unavailable
+- Resume a closed conversation from the entry beside the island. Fixed the spinner continuing after a reply finishes or fails
+- Added custom AI endpoints and an optional local Agent with separate read, write and execute permissions, a working directory, and additional read-only folders
+- Simplified LingoSoul settings with shortcuts to chat records and prompt editing; improved speech model downloads, extraction and microphone error handling
+- Removed external Agent and MCP connections while keeping built-in tools. Weather queries no longer need a preset city
+- Improved Liquid Glass resource use and responsiveness, with less background work while idle and quicker background updates
+- Liquid Glass remains visible in screenshots, recordings and remote sessions. Improved black or frozen desktop backgrounds, with Frosted Glass used automatically when capture is unavailable
+- Fixed background flashes during expansion, blocky motion-blur artifacts, and animations stopping halfway while dragging the settings window
+- Added Fuzzy Lyric Search under Show Lyrics: allow similar titles, artists and other versions without rejecting results based on track duration
+- Added "Show title without lyrics": optionally show only the song title in the compact island when a track has no lyrics or lyric display is turned off
+- Improved local and secondary lyrics, including Bengali ligatures and word highlighting
+- The timer can be enabled or disabled from the Plugins page, and the clock widget follows the system's 12/24-hour format
+- Kept Simplified Chinese and English interface languages, and removed footage recording and its tray entry
+- Improved code quality and maintainability by splitting large frame and settings modules and sharing common helpers
+
 ### v2.0.0
 - Added LingoSoul, a voice and chat assistant on the island with a wake word, listening and thinking animations, reply cards, and a chat panel with Markdown and saved history
 - LingoSoul can set timers, open apps and websites, control media, check the weather, use plugin tools and MCP servers, and hand tasks to Claude Code or Codex

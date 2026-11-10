@@ -1,5 +1,6 @@
 use std::cell::{OnceCell, RefCell};
 use std::time::{Duration, Instant};
+use winisland_utils::timing::take_elapsed;
 
 use winisland_core::i18n::tr;
 use winisland_platform::{
@@ -285,6 +286,7 @@ pub(crate) struct GuideApp {
     page: usize,
     transition: Option<(f32, Instant)>,
     last_frame: Instant,
+    next_frame_deadline: Instant,
     mouse: (f32, f32),
     hover: Option<Hit>,
     tab_hover: [f32; PAGES.len()],
@@ -375,6 +377,7 @@ impl GuideApp {
             page: 0,
             transition: None,
             last_frame: Instant::now(),
+            next_frame_deadline: Instant::now(),
             mouse: (-1.0, -1.0),
             hover: None,
             tab_hover: [0.0; PAGES.len()],
@@ -613,20 +616,26 @@ impl GuideApp {
     }
 
     pub(crate) fn update(&mut self) -> Option<Instant> {
-        if self.window.is_none() || !self.animating() {
+        if self
+            .window
+            .is_none_or(|window| window.is_minimized() == Some(true))
+            || !self.animating()
+        {
             return None;
         }
-        self.request_redraw();
-        Some(Instant::now() + FRAME_INTERVAL)
+        let now = Instant::now();
+        if now >= self.next_frame_deadline {
+            self.request_redraw();
+            self.next_frame_deadline = now + FRAME_INTERVAL;
+        }
+        Some(self.next_frame_deadline)
     }
 
     fn advance(&mut self) {
         let now = Instant::now();
-        let dt = now
-            .saturating_duration_since(self.last_frame)
+        let dt = take_elapsed(&mut self.last_frame, now)
             .as_secs_f32()
             .min(0.1);
-        self.last_frame = now;
         let blend = 1.0 - (-dt * HOVER_RATE).exp();
         for index in 0..PAGES.len() {
             let target = self.tab_hover_target(index);
@@ -645,9 +654,23 @@ impl GuideApp {
     }
 
     fn render(&mut self, renderer: &mut Renderer) {
+        if self
+            .window
+            .is_some_and(|window| window.is_minimized() == Some(true))
+        {
+            return;
+        }
         let Some(target) = self.renderer_target else {
             return;
         };
+        match renderer.prepare_frame(target) {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(error) => {
+                log::error!("Guide frame preparation failed: {error}");
+                return;
+            }
+        }
         self.advance();
         let scale = self.scale();
         let theme = self.theme();

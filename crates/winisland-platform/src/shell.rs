@@ -66,6 +66,8 @@ pub trait ShellIntegration {
     fn poll_hotkey_presses(&self) -> u32;
     /// Activates a packaged app on a dedicated STA thread; false means not found.
     fn activate_app(&self, app_user_model_id: &str) -> Result<bool, PlatformError>;
+    /// Opens an installed application by name, or a Windows settings URI, off the rendering thread.
+    fn launch_application(&self, name: &str) -> Result<String, PlatformError>;
     /// Activates a media app on a dedicated STA thread; false means not found.
     fn activate_media_app(&self, source_app_id: &str) -> Result<bool, PlatformError>;
 }

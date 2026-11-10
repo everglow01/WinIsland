@@ -50,6 +50,9 @@ SetupLogging=yes
 
 [Files]
 Source: "{#SourceDirectory}\WinIsland.exe"; DestDir: "{app}"; Flags: ignoreversion restartreplace
+Source: "{#SourceDirectory}\sherpa-onnx-c-api.dll"; DestDir: "{app}"; Flags: ignoreversion restartreplace skipifsourcedoesntexist
+Source: "{#SourceDirectory}\onnxruntime.dll"; DestDir: "{app}"; Flags: ignoreversion restartreplace skipifsourcedoesntexist
+Source: "{#SourceDirectory}\onnxruntime_providers_shared.dll"; DestDir: "{app}"; Flags: ignoreversion restartreplace skipifsourcedoesntexist
 Source: "{#SourceDirectory}\resources\icon-dark.png"; DestDir: "{app}\resources"; Flags: ignoreversion
 Source: "{#SourceDirectory}\resources\icon-dark.ico"; DestDir: "{app}\resources"; Flags: ignoreversion
 Source: "{#SourceDirectory}\resources\licenses\*"; DestDir: "{app}\resources\licenses"; Flags: ignoreversion recursesubdirs createallsubdirs

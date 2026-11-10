@@ -2,9 +2,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use pollkit::Job;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
+use winisland_utils::poll::Job;
 
 use winisland_core::config::AppConfig;
 use winisland_core::lyrics::{
@@ -143,6 +143,7 @@ impl MediaInfo {
         let line = &lyrics[index];
         Some(CurrentLyric {
             text: &line.text,
+            font_family: line.font_family.as_deref(),
             secondary_text: line
                 .secondary_text
                 .as_deref()
@@ -156,6 +157,7 @@ impl MediaInfo {
 
 pub(crate) struct CurrentLyric<'a> {
     pub(crate) text: &'a str,
+    pub(crate) font_family: Option<&'a str>,
     pub(crate) secondary_text: Option<&'a str>,
     pub(crate) started: bool,
     pub(crate) highlight: Option<LyricHighlight>,
@@ -177,6 +179,7 @@ pub struct SmtcListener {
     playback_tx: mpsc::UnboundedSender<PlaybackCommand>,
     lyrics_mode_tx: mpsc::UnboundedSender<LyricsMode>,
     lyrics_source_tx: mpsc::UnboundedSender<String>,
+    lyrics_fuzzy_search_tx: mpsc::UnboundedSender<bool>,
     lyrics_local_dir_tx: mpsc::UnboundedSender<Option<String>>,
     show_secondary_lyrics_tx: mpsc::UnboundedSender<bool>,
     allowed_apps_tx: mpsc::UnboundedSender<Vec<String>>,
@@ -199,6 +202,7 @@ impl SmtcListener {
         let (playback_tx, playback_rx) = mpsc::unbounded_channel();
         let (lyrics_mode_tx, lyrics_mode_rx) = mpsc::unbounded_channel();
         let (lyrics_source_tx, lyrics_source_rx) = mpsc::unbounded_channel();
+        let (lyrics_fuzzy_search_tx, lyrics_fuzzy_search_rx) = mpsc::unbounded_channel();
         let (lyrics_local_dir_tx, lyrics_local_dir_rx) = mpsc::unbounded_channel();
         let (show_secondary_lyrics_tx, show_secondary_lyrics_rx) = mpsc::unbounded_channel();
         let (allowed_apps_tx, allowed_apps_rx) = mpsc::unbounded_channel();
@@ -207,6 +211,7 @@ impl SmtcListener {
 
         let _ = lyrics_mode_tx.send(config.lyrics_mode.as_str().into());
         let _ = lyrics_source_tx.send(config.lyrics_source.clone());
+        let _ = lyrics_fuzzy_search_tx.send(config.lyrics_fuzzy_search);
         let _ = lyrics_local_dir_tx.send(config.lyrics_local_dir.clone());
         let _ = show_secondary_lyrics_tx.send(config.show_secondary_lyrics);
         let _ = allowed_apps_tx.send(config.smtc_apps.clone());
@@ -223,6 +228,7 @@ impl SmtcListener {
                     playback_rx,
                     lyrics_mode_rx,
                     lyrics_source_rx,
+                    lyrics_fuzzy_search_rx,
                     lyrics_local_dir_rx,
                     show_secondary_lyrics_rx,
                     allowed_apps_rx,
@@ -243,6 +249,7 @@ impl SmtcListener {
             playback_tx,
             lyrics_mode_tx,
             lyrics_source_tx,
+            lyrics_fuzzy_search_tx,
             lyrics_local_dir_tx,
             show_secondary_lyrics_tx,
             allowed_apps_tx,
@@ -285,6 +292,12 @@ impl SmtcListener {
 
     pub fn set_lyrics_source(&self, source: String) {
         let _ = self.lyrics_source_tx.send(source);
+    }
+
+    pub fn set_lyrics_fuzzy_search(&self, fuzzy: bool) {
+        if self.lyrics_fuzzy_search_tx.send(fuzzy).is_ok() {
+            self.wake_worker();
+        }
     }
 
     pub fn set_lyrics_mode(&self, mode: String) {
@@ -355,6 +368,7 @@ pub(super) struct LyricsFetchRequest {
     pub(super) source: String,
     pub(super) local_dir: Option<String>,
     pub(super) show_secondary: bool,
+    pub(super) fuzzy_search: bool,
     pub(super) request_id: u64,
     pub(super) track_id: u64,
 }
@@ -365,6 +379,7 @@ pub(super) struct LyricsFetchConfig<'a> {
     pub(super) source: &'a str,
     pub(super) local_dir: Option<&'a str>,
     pub(super) show_secondary: bool,
+    pub(super) fuzzy_search: bool,
     pub(super) bridge: Option<&'a winisland_plugin_host::lifecycle::LyricsBridge>,
 }
 
@@ -409,8 +424,9 @@ pub(super) fn spawn_lyrics_fetch(
                     Some(dir) => {
                         let title = request.title.clone();
                         let artist = request.artist.clone();
+                        let fuzzy = request.fuzzy_search;
                         tokio::task::spawn_blocking(move || {
-                            load_local_lyrics(&title, &artist, &dir)
+                            load_local_lyrics(&title, &artist, &dir, fuzzy)
                         })
                         .await
                         .ok()
@@ -424,6 +440,7 @@ pub(super) fn spawn_lyrics_fetch(
                     &request.artist,
                     request.duration_secs,
                     &request.source,
+                    request.fuzzy_search,
                 )
                 .await
             };

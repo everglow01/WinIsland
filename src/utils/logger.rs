@@ -6,7 +6,7 @@ use std::panic::{self, PanicHookInfo};
 use std::path::{Path, PathBuf};
 
 const LOG_FILE: &str = "winisland.log";
-const MAX_LOG_SIZE: u64 = 1_024_000; // 1MB
+const MAX_LOG_SIZE: u64 = 1_024_000;
 
 struct FileLogger {
     state: Mutex<LogFile>,
@@ -248,7 +248,6 @@ See ~/.winisland/logs/winisland.log for recent activity.
         env!("CARGO_PKG_VERSION"),
     );
 
-    // Try writing to log directory first
     let mut path = log_dir();
     path.push(format!("crash-{file_ts}.txt"));
 
@@ -260,7 +259,6 @@ See ~/.winisland/logs/winisland.log for recent activity.
         return;
     }
 
-    // Fallback: write to Desktop
     let msg_text = format!("WinIsland crashed at {location}\n\nReason: {msg}");
     if let Some(desktop) = get_desktop_path() {
         let mut desktop_path = desktop;
@@ -274,7 +272,6 @@ See ~/.winisland/logs/winisland.log for recent activity.
         }
     }
 
-    // Final fallback: show message box with crash info
     show_error_message("WinIsland Crash", &msg_text);
 }
 
@@ -282,17 +279,16 @@ pub(crate) fn show_error_message(title: &str, text: &str) {
     crate::platform::shell().fatal_dialog(title, text);
 }
 
-fn write_report_to(path: &std::path::Path, report: &str) -> std::io::Result<()> {
-    use std::io::Write;
+fn write_report_to(path: &Path, report: &str) -> std::io::Result<()> {
     let mut file = fs::File::create(path)?;
     file.write_all(report.as_bytes())?;
     file.sync_all()?;
     Ok(())
 }
 
-fn get_desktop_path() -> Option<std::path::PathBuf> {
+fn get_desktop_path() -> Option<PathBuf> {
     if let Ok(path) = std::env::var("USERPROFILE") {
-        let mut buf = std::path::PathBuf::from(path);
+        let mut buf = PathBuf::from(path);
         buf.push("Desktop");
         if buf.exists() {
             return Some(buf);

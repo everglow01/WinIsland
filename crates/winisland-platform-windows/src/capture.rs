@@ -1,68 +1,123 @@
+mod desktop;
+mod interop;
+mod wallpaper;
+mod window;
+
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::JoinHandle;
 
-mod magnifier;
-
-use parking_lot::Mutex;
-use windows::{
-    Foundation::Metadata::ApiInformation,
-    Foundation::TimeSpan,
-    Graphics::Capture::{
-        Direct3D11CaptureFrame, Direct3D11CaptureFramePool, GraphicsCaptureAccess,
-        GraphicsCaptureAccessKind, GraphicsCaptureDirtyRegionMode, GraphicsCaptureItem,
-        GraphicsCaptureSession,
-    },
-    Graphics::DirectX::{Direct3D11::IDirect3DDevice, DirectXPixelFormat},
-    Graphics::SizeInt32,
-    Security::Authorization::AppCapabilityAccess::AppCapabilityAccessStatus,
-    Win32::{
-        Foundation::{HANDLE, HMODULE, HWND, LUID, RECT},
-        Graphics::{
-            Direct3D::{D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1},
-            Direct3D11::{
-                D3D11_BOX, D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                D3D11_MAP_FLAG_DO_NOT_WAIT, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE,
-                D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING,
-                D3D11CreateDevice, ID3D11Device, ID3D11Device1, ID3D11Device5, ID3D11DeviceContext,
-                ID3D11DeviceContext4, ID3D11Fence, ID3D11Multithread, ID3D11Texture2D,
-            },
-            Dxgi::{
-                Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC},
-                CreateDXGIFactory1, DXGI_ERROR_WAS_STILL_DRAWING, IDXGIAdapter, IDXGIDevice,
-                IDXGIFactory4,
-            },
-            Gdi::{
-                GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
-            },
-        },
-        System::WinRT::{
-            Direct3D11::{CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess},
-            Graphics::Capture::IGraphicsCaptureItemInterop,
-        },
-        UI::WindowsAndMessaging::{
-            GetWindowRect, SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
-        },
-    },
-    core::{HSTRING, Interface},
+use parking_lot::{Condvar, Mutex};
+use windows::Win32::Foundation::{HANDLE, HMODULE, HWND, LUID};
+use windows::Win32::Graphics::Direct3D::{
+    D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1,
 };
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11_BOX, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
+    D3D11_USAGE_DEFAULT, D3D11CreateDevice, ID3D11Device, ID3D11Device1, ID3D11Device5,
+    ID3D11DeviceContext, ID3D11DeviceContext4, ID3D11Fence, ID3D11Multithread, ID3D11Texture2D,
+};
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
+use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIAdapter, IDXGIFactory4};
+use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromWindow};
+use windows::core::Interface;
 use winisland_platform::{BackdropCaptureFrame, BackdropCaptureRequest, BackdropShare, Rect};
 
-const FRAME_BUFFERS: i32 = 2;
-const PIXEL_RATE_LIMIT: u32 = 60;
-const PROBE_STEP: usize = 2;
-const PROBE_ALIGN: u32 = 64;
-const BORDER_UNKNOWN: u8 = 0;
-const BORDER_PENDING: u8 = 1;
-const BORDER_OPTIONAL: u8 = 2;
-const BORDER_REQUIRED: u8 = 3;
+pub(super) struct Graphics {
+    device: ID3D11Device5,
+    context: ID3D11DeviceContext4,
+}
 
-static BORDER_ACCESS: AtomicU8 = AtomicU8::new(BORDER_UNKNOWN);
+impl Graphics {
+    fn new(adapter_luid: u64) -> Result<Self, String> {
+        let bytes = adapter_luid.to_le_bytes();
+        let luid = LUID {
+            LowPart: u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+            HighPart: i32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
+        };
+        // SAFETY: DXGI returns owned factory and adapter interfaces for the supplied LUID.
+        let adapter: IDXGIAdapter = unsafe {
+            CreateDXGIFactory1::<IDXGIFactory4>()
+                .and_then(|factory| factory.EnumAdapterByLuid(luid))
+        }
+        .map_err(|error| format!("Capture adapter lookup failed: {error}"))?;
+        Self::from_adapter(&adapter)
+    }
 
-#[derive(Clone)]
-enum Frame {
-    Window(Direct3D11CaptureFrame),
-    Pixels(Arc<magnifier::PixelFrame>),
+    fn from_adapter(adapter: &IDXGIAdapter) -> Result<Self, String> {
+        let mut device: Option<ID3D11Device> = None;
+        let mut context: Option<ID3D11DeviceContext> = None;
+        // SAFETY: The adapter is live and both outputs are initialized, owned Options.
+        unsafe {
+            D3D11CreateDevice(
+                adapter,
+                D3D_DRIVER_TYPE_UNKNOWN,
+                HMODULE::default(),
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                Some(&[D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0]),
+                D3D11_SDK_VERSION,
+                Some(&mut device),
+                None,
+                Some(&mut context),
+            )
+        }
+        .map_err(|error| format!("Capture device creation failed: {error}"))?;
+        let device = device.ok_or("Capture device is missing")?;
+        let context = context.ok_or("Capture context is missing")?;
+        let multithread: ID3D11Multithread = context
+            .cast()
+            .map_err(|error| format!("Capture context protection is unavailable: {error}"))?;
+        // SAFETY: Protection serializes immediate-context calls from the capture and UI threads.
+        let _ = unsafe { multithread.SetMultithreadProtected(true) };
+        Ok(Self {
+            device: device.cast().map_err(|error| error.to_string())?,
+            context: context.cast().map_err(|error| error.to_string())?,
+        })
+    }
+
+    fn texture(&self, width: u32, height: u32) -> Result<ID3D11Texture2D, String> {
+        let description = D3D11_TEXTURE2D_DESC {
+            Width: width,
+            Height: height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DEFAULT,
+            ..Default::default()
+        };
+        let mut texture = None;
+        // SAFETY: The descriptor is initialized; the call returns an owned texture.
+        unsafe {
+            self.device
+                .CreateTexture2D(&description, None, Some(&mut texture))
+        }
+        .map_err(|error| format!("Capture texture creation failed: {error}"))?;
+        texture.ok_or_else(|| "Capture texture is missing".into())
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Request {
+    monitor: isize,
+    area: Rect,
+    interest: Rect,
+    rate_hz: u32,
+    pixel_scale: u32,
+}
+
+struct Frame {
+    monitor: isize,
+    bounds: Rect,
+    origin: (i32, i32),
+    size: (u32, u32),
+    pixel_scale: u32,
+    texture: ID3D11Texture2D,
+    captured_at: Option<std::time::Instant>,
 }
 
 #[derive(Default)]
@@ -71,34 +126,35 @@ struct Latest {
     sequence: u64,
 }
 
-struct Shared {
-    latest: Mutex<Latest>,
-    interest: Mutex<Rect>,
-    pending: AtomicBool,
-    content: Mutex<SizeInt32>,
-    device: AgileDevice,
-    d3d: AgileContext,
-    probe: Mutex<Probe>,
-}
-
 #[derive(Default)]
-struct Probe {
-    staging: Option<(ID3D11Texture2D, u32, u32)>,
-    rect: Rect,
-    samples: Vec<u32>,
-    scratch: Vec<u32>,
+struct Control {
+    request: Option<Request>,
+    stopped: bool,
+    frame_arrived: bool,
 }
 
-struct Session {
-    monitor: HMONITOR,
-    origin: Cell<(i32, i32)>,
-    source: Cell<(i32, i32, i32, i32)>,
-    pool: Direct3D11CaptureFramePool,
-    session: GraphicsCaptureSession,
-    token: i64,
-    rate_hz: Cell<u32>,
-    borderless: Cell<bool>,
-    magnifier: Option<magnifier::Magnifier>,
+struct Shared {
+    control: Mutex<Control>,
+    changed: Condvar,
+    latest: Mutex<Latest>,
+    pending: AtomicBool,
+    redraw: Arc<dyn Fn() + Send + Sync>,
+}
+
+impl Shared {
+    fn notify_frame(&self) {
+        let mut control = self.control.lock();
+        if !control.frame_arrived {
+            control.frame_arrived = true;
+            self.changed.notify_one();
+        }
+    }
+
+    fn wake(&self) {
+        if !self.pending.swap(true, Ordering::AcqRel) {
+            (self.redraw)();
+        }
+    }
 }
 
 struct Import {
@@ -106,75 +162,53 @@ struct Import {
     texture: ID3D11Texture2D,
     write_fence: ID3D11Fence,
     read_fence: ID3D11Fence,
-    size: (u32, u32),
 }
 
 pub(crate) struct BackdropCapture {
     hwnd: HWND,
-    magnifier_mode: Cell<bool>,
-    pixel_mode: Cell<bool>,
-    pixels: RefCell<Option<magnifier::Magnifier>>,
-    upload: RefCell<Option<(ID3D11Texture2D, u32, u32)>>,
-    device: ID3D11Device5,
-    context: ID3D11DeviceContext4,
+    graphics: Arc<Graphics>,
     shared: Arc<Shared>,
-    session: RefCell<Option<Session>>,
+    worker: Option<JoinHandle<()>>,
     import: RefCell<Option<Import>>,
     copied: Cell<Option<(u64, u64, i32, i32)>>,
     verified: Cell<Rect>,
-    write_value: AtomicU64,
-    serial: Cell<u64>,
+    write_value: Cell<u64>,
+    captured_at: Cell<Option<std::time::Instant>>,
 }
 
 impl BackdropCapture {
     pub(crate) fn new(
-        hwnd: HWND,
+        windows: &[HWND],
         adapter_luid: u64,
-        visible_to_capture: bool,
+        redraw: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<Self, String> {
-        if !GraphicsCaptureSession::IsSupported().unwrap_or(false) {
-            return Err("Windows.Graphics.Capture is unsupported".to_string());
-        }
-        let (device, context) = create_device(adapter_luid)?;
-        let dxgi: IDXGIDevice = device
-            .cast()
-            .map_err(|error| format!("IDXGIDevice is unavailable: {error}"))?;
-        // SAFETY: The DXGI device is live; WinRT returns an owned inspectable wrapper.
-        let winrt_device: IDirect3DDevice = unsafe { CreateDirect3D11DeviceFromDXGIDevice(&dxgi) }
-            .and_then(|device| device.cast())
-            .map_err(|error| format!("WinRT Direct3D device creation failed: {error}"))?;
-        let mut magnifier_mode = visible_to_capture;
-        if !magnifier_mode && let Err(error) = exclude_from_capture(hwnd) {
-            log::warn!("{error}; the liquid glass backdrop uses the magnifier instead");
-            magnifier_mode = true;
-        }
-        let d3d = AgileContext(device.clone().into(), context.clone().into());
-        let capture = Self {
+        let hwnd = *windows.first().ok_or("Overlay window is missing")?;
+        let graphics = Arc::new(Graphics::new(adapter_luid)?);
+        let excluded = windows.iter().map(|hwnd| hwnd.0 as isize).collect();
+        let shared = Arc::new(Shared {
+            control: Mutex::default(),
+            changed: Condvar::default(),
+            latest: Mutex::default(),
+            pending: AtomicBool::new(false),
+            redraw,
+        });
+        let worker_graphics = Arc::clone(&graphics);
+        let worker_shared = Arc::clone(&shared);
+        let worker = std::thread::Builder::new()
+            .name("liquid-capture".into())
+            .spawn(move || desktop::run(worker_graphics, worker_shared, excluded))
+            .map_err(|error| format!("Capture worker failed to start: {error}"))?;
+        Ok(Self {
             hwnd,
-            magnifier_mode: Cell::new(magnifier_mode),
-            pixel_mode: Cell::new(false),
-            pixels: RefCell::new(None),
-            upload: RefCell::new(None),
-            device,
-            context,
-            shared: Arc::new(Shared {
-                latest: Mutex::new(Latest::default()),
-                interest: Mutex::new(Rect::default()),
-                pending: AtomicBool::new(false),
-                content: Mutex::new(SizeInt32::default()),
-                device: AgileDevice(winrt_device),
-                d3d,
-                probe: Mutex::new(Probe::default()),
-            }),
-            session: RefCell::new(None),
+            graphics,
+            shared,
+            worker: Some(worker),
             import: RefCell::new(None),
             copied: Cell::new(None),
             verified: Cell::new(Rect::default()),
-            write_value: AtomicU64::new(0),
-            serial: Cell::new(0),
-        };
-        capture.ensure_session(60)?;
-        Ok(capture)
+            write_value: Cell::new(0),
+            captured_at: Cell::new(None),
+        })
     }
 
     pub(crate) fn pending(&self) -> bool {
@@ -182,174 +216,179 @@ impl BackdropCapture {
     }
 
     pub(crate) fn update(&self, request: BackdropCaptureRequest) -> Option<BackdropCaptureFrame> {
-        if let Err(error) = self.ensure_session(request.max_rate_hz) {
-            log::warn!("Backdrop capture restart failed: {error}");
-            return None;
-        }
-        let session_origin = self
-            .session
-            .borrow()
-            .as_ref()
-            .map(|session| session.origin.get());
-        if let Some(origin) = session_origin {
-            *self.shared.interest.lock() = relative(request.interest, origin);
-        }
-        if let Some(magnifier) = self.pixels.borrow().as_ref()
-            && let Some(source) = monitor_clamped(self.hwnd, request.interest)
+        let pixel_scale = request.share.pixel_scale.clamp(1, 2);
+        let width = i32::try_from(request.share.width.checked_mul(pixel_scale)?).ok()?;
+        let height = i32::try_from(request.share.height.checked_mul(pixel_scale)?).ok()?;
+        let area = Rect {
+            left: request.origin.x,
+            top: request.origin.y,
+            right: request.origin.x.checked_add(width)?,
+            bottom: request.origin.y.checked_add(height)?,
+        };
+        // SAFETY: The window registry keeps the overlay alive while capture is running.
+        let monitor = unsafe { MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST) };
+        let capture = Request {
+            monitor: monitor.0 as isize,
+            area,
+            interest: request.interest,
+            rate_hz: request.max_rate_hz.clamp(1, 60),
+            pixel_scale,
+        };
         {
-            magnifier.set_source(source);
+            let mut control = self.shared.control.lock();
+            if control.request != Some(capture) {
+                control.request = Some(capture);
+                self.shared.changed.notify_one();
+            }
         }
         self.shared.pending.store(false, Ordering::Release);
         self.ensure_import(request.share)?;
-        let (frame, sequence) = {
-            let latest = self.shared.latest.lock();
-            (latest.frame.clone()?, latest.sequence)
+        let Some(latest) = self.shared.latest.try_lock() else {
+            return self
+                .copied
+                .get()
+                .filter(|copied| {
+                    copied.0 == request.share.generation
+                        && copied.2 == area.left
+                        && copied.3 == area.top
+                })
+                .map(|_| BackdropCaptureFrame {
+                    write_value: self.write_value.get(),
+                    serial: self.write_value.get(),
+                    captured_at: self.captured_at.get(),
+                });
         };
-        let origin = match &frame {
-            Frame::Pixels(pixels) => pixels.origin,
-            Frame::Window(_) => session_origin?,
+        let frame = latest.frame.as_ref().filter(|frame| {
+            frame.monitor == capture.monitor
+                && frame.pixel_scale == pixel_scale
+                && frame.origin == (area.left, area.top)
+                && frame.size == (request.share.width, request.share.height)
+        })?;
+        let coverage = Rect {
+            left: frame.origin.0,
+            top: frame.origin.1,
+            right: frame
+                .origin
+                .0
+                .checked_add(i32::try_from(frame.size.0.checked_mul(pixel_scale)?).ok()?)?,
+            bottom: frame
+                .origin
+                .1
+                .checked_add(i32::try_from(frame.size.1.checked_mul(pixel_scale)?).ok()?)?,
         };
-        let interest = relative(request.interest, origin);
+        let visible = intersection(area, frame.bounds);
+        rect_size(visible)?;
+        if intersection(visible, coverage) != visible {
+            return None;
+        }
         let key = (
             request.share.generation,
-            sequence,
-            request.origin.x - origin.0,
-            request.origin.y - origin.1,
+            latest.sequence,
+            area.left,
+            area.top,
         );
-        let verified = intersection(self.verified.get(), interest);
-        if self.copied.get() != Some(key) || verified != interest {
-            self.copy(&frame, request, key)?;
-            self.verified.set(interest);
-        } else {
-            self.verified.set(verified);
+        let interest = intersection(request.interest, frame.bounds);
+        if self.copied.get() != Some(key) || intersection(self.verified.get(), interest) != interest
+        {
+            match self.copy(frame, visible, request) {
+                Ok(true) => {
+                    self.copied.set(Some(key));
+                    self.verified.set(interest);
+                    self.captured_at.set(frame.captured_at);
+                }
+                Ok(false)
+                    if self.copied.get().is_some_and(|copied| {
+                        copied.0 == key.0 && copied.2 == key.2 && copied.3 == key.3
+                    }) => {}
+                Ok(false) => return None,
+                Err(error) => {
+                    log::warn!("Desktop backdrop copy failed: {error}");
+                    return None;
+                }
+            }
         }
         Some(BackdropCaptureFrame {
-            write_value: self.write_value.load(Ordering::Acquire),
-            serial: self.serial.get(),
+            write_value: self.write_value.get(),
+            serial: self.write_value.get(),
+            captured_at: self.captured_at.get(),
         })
     }
 
     fn copy(
         &self,
         frame: &Frame,
+        visible: Rect,
         request: BackdropCaptureRequest,
-        key: (u64, u64, i32, i32),
-    ) -> Option<()> {
+    ) -> Result<bool, String> {
         let import = self.import.borrow();
-        let import = import.as_ref()?;
-        let (source, content) = match frame {
-            Frame::Window(frame) => (frame_texture(frame).ok()?, frame.ContentSize().ok()?),
-            Frame::Pixels(pixels) => (
-                self.upload_pixels(pixels)?,
-                SizeInt32 {
-                    Width: pixels.width as i32,
-                    Height: pixels.height as i32,
-                },
-            ),
+        let import = import.as_ref().ok_or("Backdrop texture is not shared")?;
+        // SAFETY: Both imported fences remain owned for this generation. Keep at most one
+        // capture write queued while allowing a pending renderer read to finish on the GPU.
+        let (read_completed, write_completed) = unsafe {
+            (
+                import.read_fence.GetCompletedValue(),
+                import.write_fence.GetCompletedValue(),
+            )
         };
-        let (local_x, local_y) = (key.2, key.3);
-        let left = local_x.max(0);
-        let top = local_y.max(0);
-        let right = (local_x + import.size.0 as i32).min(content.Width);
-        let bottom = (local_y + import.size.1 as i32).min(content.Height);
-        if right <= left || bottom <= top {
-            return None;
+        if read_completed == u64::MAX || write_completed == u64::MAX {
+            return Err("Backdrop rendering device was removed".into());
         }
-        let source_box = D3D11_BOX {
-            left: left as u32,
-            top: top as u32,
+        if self.copied.get().is_some() && write_completed < self.write_value.get() {
+            return Ok(false);
+        }
+        let offset = |value: i32, origin: i32| {
+            u32::try_from(i64::from(value) - i64::from(origin))
+                .map(|value| value / frame.pixel_scale)
+                .map_err(|error| error.to_string())
+        };
+        let region = D3D11_BOX {
+            left: offset(visible.left, frame.origin.0)?,
+            top: offset(visible.top, frame.origin.1)?,
             front: 0,
-            right: right as u32,
-            bottom: bottom as u32,
+            right: offset(visible.right, frame.origin.0)?,
+            bottom: offset(visible.bottom, frame.origin.1)?,
             back: 1,
         };
-        let value = self.write_value.load(Ordering::Acquire) + 1;
-        // SAFETY: Every interface is live on this device; the box lies inside both textures, and the
-        // GPU waits until the renderer finished reading before overwriting the shared texture.
-        let result = unsafe {
-            self.context
-                .Wait(&import.read_fence, request.read_value)
+        let x = offset(visible.left, request.origin.x)?;
+        let y = offset(visible.top, request.origin.y)?;
+        let value = self
+            .write_value
+            .get()
+            .checked_add(1)
+            .ok_or("Backdrop fence exhausted")?;
+        // SAFETY: Both textures are on this device. Intersection checks bound the source and
+        // destination; a GPU-side wait orders this copy after any unfinished D3D12 reads.
+        unsafe {
+            self.graphics
+                .device
+                .GetDeviceRemovedReason()
+                .and_then(|()| {
+                    if read_completed < request.read_value {
+                        self.graphics
+                            .context
+                            .Wait(&import.read_fence, request.read_value)
+                    } else {
+                        Ok(())
+                    }
+                })
                 .map(|()| {
-                    self.context.CopySubresourceRegion(
+                    self.graphics.context.CopySubresourceRegion(
                         &import.texture,
                         0,
-                        (left - local_x) as u32,
-                        (top - local_y) as u32,
+                        x,
+                        y,
                         0,
-                        &source,
+                        &frame.texture,
                         0,
-                        Some(&source_box),
-                    );
+                        Some(&region),
+                    )
                 })
-                .and_then(|()| self.context.Signal(&import.write_fence, value))
-                .map(|()| self.context.Flush())
-        };
-        if let Err(error) = result {
-            log::warn!("Backdrop capture copy failed: {error}");
-            return None;
+                .and_then(|()| self.graphics.context.Signal(&import.write_fence, value))
+                .map(|()| self.graphics.context.Flush())
         }
-        // SAFETY: This only queries the retained device's removal status.
-        if let Err(error) = unsafe { self.device.GetDeviceRemovedReason() } {
-            log::warn!("Backdrop capture device removed: {error}");
-            return None;
-        }
-        self.write_value.store(value, Ordering::Release);
-        self.serial.set(value);
-        self.copied.set(Some(key));
-        Some(())
-    }
-
-    fn upload_pixels(&self, pixels: &magnifier::PixelFrame) -> Option<ID3D11Texture2D> {
-        if self
-            .upload
-            .borrow()
-            .as_ref()
-            .is_none_or(|(_, width, height)| *width < pixels.width || *height < pixels.height)
-        {
-            let desc = D3D11_TEXTURE2D_DESC {
-                Width: pixels.width.max(1),
-                Height: pixels.height.max(1),
-                MipLevels: 1,
-                ArraySize: 1,
-                Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                SampleDesc: DXGI_SAMPLE_DESC {
-                    Count: 1,
-                    Quality: 0,
-                },
-                Usage: D3D11_USAGE_DEFAULT,
-                ..Default::default()
-            };
-            let mut texture = None;
-            // SAFETY: The descriptor is initialized and the output Option is owned by this call.
-            if let Err(error) =
-                unsafe { self.device.CreateTexture2D(&desc, None, Some(&mut texture)) }
-            {
-                log::warn!("Backdrop upload texture failed: {error}");
-                return None;
-            }
-            *self.upload.borrow_mut() = Some((texture?, desc.Width, desc.Height));
-        }
-        let texture = self.upload.borrow().as_ref()?.0.clone();
-        let region = D3D11_BOX {
-            left: 0,
-            top: 0,
-            front: 0,
-            right: pixels.width,
-            bottom: pixels.height,
-            back: 1,
-        };
-        // SAFETY: The box fits the texture and `pixels` holds `height` rows of `width` BGRA texels.
-        unsafe {
-            self.context.UpdateSubresource(
-                &texture,
-                0,
-                Some(&region),
-                pixels.pixels.as_ptr().cast(),
-                pixels.width * 4,
-                0,
-            );
-        }
-        Some(texture)
+        .map_err(|error| error.to_string())?;
+        self.write_value.set(value);
+        Ok(true)
     }
 
     fn ensure_import(&self, share: BackdropShare) -> Option<()> {
@@ -362,36 +401,39 @@ impl BackdropCapture {
             return Some(());
         }
         self.import.borrow_mut().take();
-        let device1: ID3D11Device1 = self.device.cast().ok()?;
-        // SAFETY: The renderer keeps every NT handle open while this generation is current;
-        // opening duplicates the references, so this import outlives later handle closure.
-        let import = (|| unsafe {
+        let device1: ID3D11Device1 = self.graphics.device.cast().ok()?;
+        // SAFETY: The renderer retains these NT handles for the current generation. Opening
+        // them creates owned COM references; the capture and renderer use the same adapter.
+        let result = (|| unsafe {
             let texture: ID3D11Texture2D =
                 device1.OpenSharedResource1(HANDLE(share.texture as *mut _))?;
-            let mut write_fence: Option<ID3D11Fence> = None;
-            self.device
+            let mut write_fence = None;
+            let mut read_fence = None;
+            self.graphics
+                .device
                 .OpenSharedFence(HANDLE(share.write_fence as *mut _), &mut write_fence)?;
-            let mut read_fence: Option<ID3D11Fence> = None;
-            self.device
+            self.graphics
+                .device
                 .OpenSharedFence(HANDLE(share.read_fence as *mut _), &mut read_fence)?;
             windows::core::Result::Ok(Import {
                 generation: share.generation,
                 texture,
                 write_fence: write_fence.ok_or_else(windows::core::Error::empty)?,
                 read_fence: read_fence.ok_or_else(windows::core::Error::empty)?,
-                size: (share.width, share.height),
             })
         })();
-        match import {
+        match result {
             Ok(import) => {
-                // SAFETY: The fence was opened above and stays live inside the import.
+                // SAFETY: The owned fence stays live for this query and throughout subsequent copies.
                 let completed = unsafe { import.write_fence.GetCompletedValue() };
-                if completed > self.write_value.load(Ordering::Acquire) {
-                    self.write_value.store(completed, Ordering::Release);
+                if completed == u64::MAX {
+                    log::warn!("Backdrop sharing device was removed");
+                    return None;
                 }
-                self.serial.set(self.serial.get().max(completed));
+                self.write_value.set(self.write_value.get().max(completed));
                 *self.import.borrow_mut() = Some(import);
                 self.copied.set(None);
+                self.captured_at.set(None);
                 Some(())
             }
             Err(error) => {
@@ -400,623 +442,33 @@ impl BackdropCapture {
             }
         }
     }
-
-    fn ensure_session(&self, rate_hz: u32) -> Result<(), String> {
-        if self.pixel_mode.get() {
-            return self.ensure_pixel_session(rate_hz);
-        }
-        if self.magnifier_mode.get() {
-            match self.ensure_magnifier_session(rate_hz) {
-                Ok(()) => return Ok(()),
-                Err(error) => {
-                    log::warn!("Magnifier backdrop is unavailable, using monitor capture: {error}");
-                    self.magnifier_mode.set(false);
-                    self.session.borrow_mut().take();
-                    exclude_from_capture(self.hwnd)?;
-                }
-            }
-        }
-        // SAFETY: hwnd is the live overlay window; the call only reads its placement.
-        let monitor = unsafe { MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST) };
-        if let Some(session) = self.session.borrow().as_ref()
-            && session.monitor == monitor
-        {
-            if session.rate_hz.get() != rate_hz {
-                session.rate_hz.set(rate_hz);
-                set_rate(&session.session, rate_hz);
-            }
-            if !session.borderless.get() && borderless_allowed() {
-                session.borderless.set(true);
-                hide_border(&session.session);
-            }
-            if border_access_required() {
-                self.session.borrow_mut().take();
-                return Err("Borderless screen capture access is unavailable".to_string());
-            }
-            return Ok(());
-        }
-        self.session.borrow_mut().take();
-        *self.shared.latest.lock() = Latest::default();
-        self.copied.set(None);
-        let session = Session::start(monitor, &self.shared, rate_hz)?;
-        *self.session.borrow_mut() = Some(session);
-        Ok(())
-    }
-
-    fn ensure_magnifier_session(&self, rate_hz: u32) -> Result<(), String> {
-        let rect = window_rect(self.hwnd)?;
-        let source = (rect.left, rect.top, rect.right, rect.bottom);
-        if let Some(session) = self.session.borrow().as_ref()
-            && let Some(magnifier) = &session.magnifier
-        {
-            if session.rate_hz.get() != rate_hz {
-                session.rate_hz.set(rate_hz);
-                set_rate(&session.session, rate_hz);
-                magnifier.set_rate(rate_hz);
-            }
-            if session.source.get() != source {
-                session.source.set(source);
-                session.origin.set((rect.left, rect.top));
-                magnifier.set_source(rect);
-            }
-            if !session.borderless.get() && borderless_allowed() {
-                session.borderless.set(true);
-                hide_border(&session.session);
-            }
-            if border_access_required() {
-                return Err("Borderless screen capture access is unavailable".to_string());
-            }
-            return Ok(());
-        }
-        self.session.borrow_mut().take();
-        *self.shared.latest.lock() = Latest::default();
-        self.copied.set(None);
-        let magnifier = magnifier::Magnifier::start(rect, rate_hz, None)?;
-        let interop = windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()
-            .map_err(|error| format!("Capture interop is unavailable: {error}"))?;
-        // SAFETY: The magnifier host is a live window owned by this process.
-        let item: GraphicsCaptureItem = match unsafe { interop.CreateForWindow(magnifier.host()) } {
-            Ok(item) => item,
-            Err(error) => {
-                log::info!(
-                    "Magnifier window capture is unavailable ({error}); reading magnifier frames directly"
-                );
-                drop(magnifier);
-                self.pixel_mode.set(true);
-                return self.ensure_pixel_session(rate_hz);
-            }
-        };
-        // SAFETY: hwnd is the live overlay window; the call only reads its placement.
-        let monitor = unsafe { MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST) };
-        let session = Session::open(
-            item,
-            &self.shared,
-            rate_hz,
-            monitor,
-            (rect.left, rect.top),
-            Some(magnifier),
-        )?;
-        session.source.set(source);
-        *self.session.borrow_mut() = Some(session);
-        Ok(())
-    }
-}
-
-impl BackdropCapture {
-    fn ensure_pixel_session(&self, rate_hz: u32) -> Result<(), String> {
-        let rate_hz = rate_hz.min(PIXEL_RATE_LIMIT);
-        if let Some(magnifier) = self.pixels.borrow().as_ref() {
-            magnifier.set_rate(rate_hz);
-            return Ok(());
-        }
-        self.session.borrow_mut().take();
-        *self.shared.latest.lock() = Latest::default();
-        self.copied.set(None);
-        let weak = Arc::downgrade(&self.shared);
-        let sink: magnifier::FrameSink = Box::new(move |frame| {
-            if let Some(shared) = weak.upgrade() {
-                shared.receive_pixels(frame);
-            }
-        });
-        let magnifier = magnifier::Magnifier::start(window_rect(self.hwnd)?, rate_hz, Some(sink))?;
-        *self.pixels.borrow_mut() = Some(magnifier);
-        Ok(())
-    }
-}
-
-impl Session {
-    fn start(monitor: HMONITOR, shared: &Arc<Shared>, rate_hz: u32) -> Result<Self, String> {
-        let mut info = MONITORINFO {
-            cbSize: size_of::<MONITORINFO>() as u32,
-            ..Default::default()
-        };
-        // SAFETY: monitor came from MonitorFromWindow and info is a correctly sized output.
-        if !unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
-            return Err("Monitor information is unavailable".to_string());
-        }
-        let interop = windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()
-            .map_err(|error| format!("Capture interop is unavailable: {error}"))?;
-        // SAFETY: monitor is a live display handle; WinRT returns an owned capture item.
-        let item: GraphicsCaptureItem = unsafe { interop.CreateForMonitor(monitor) }
-            .map_err(|error| format!("Monitor capture item failed: {error}"))?;
-        Self::open(
-            item,
-            shared,
-            rate_hz,
-            monitor,
-            (info.rcMonitor.left, info.rcMonitor.top),
-            None,
-        )
-    }
-
-    fn open(
-        item: GraphicsCaptureItem,
-        shared: &Arc<Shared>,
-        rate_hz: u32,
-        monitor: HMONITOR,
-        origin: (i32, i32),
-        magnifier: Option<magnifier::Magnifier>,
-    ) -> Result<Self, String> {
-        let size = item
-            .Size()
-            .map_err(|error| format!("Capture size is unavailable: {error}"))?;
-        *shared.content.lock() = size;
-        let pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
-            &shared.device.0,
-            DirectXPixelFormat::B8G8R8A8UIntNormalized,
-            FRAME_BUFFERS,
-            size,
-        )
-        .map_err(|error| format!("Capture frame pool failed: {error}"))?;
-        let weak = Arc::downgrade(shared);
-        let token = pool
-            .FrameArrived(&windows::Foundation::TypedEventHandler::new(
-                move |pool: windows::core::Ref<'_, Direct3D11CaptureFramePool>, _| {
-                    if let (Some(pool), Some(shared)) = (pool.as_ref(), weak.upgrade()) {
-                        shared.receive(pool);
-                    }
-                    Ok(())
-                },
-            ))
-            .map_err(|error| format!("Capture frame handler failed: {error}"))?;
-        let session = pool
-            .CreateCaptureSession(&item)
-            .map_err(|error| format!("Capture session failed: {error}"))?;
-        let _ = session.SetIsCursorCaptureEnabled(false);
-        let borderless = borderless_allowed();
-        if border_access_required() {
-            return Err("Borderless screen capture access is unavailable".to_string());
-        }
-        if borderless {
-            hide_border(&session);
-        }
-        let _ = session.SetDirtyRegionMode(GraphicsCaptureDirtyRegionMode::ReportOnly);
-        set_rate(&session, rate_hz);
-        session
-            .StartCapture()
-            .map_err(|error| format!("Capture start failed: {error}"))?;
-        Ok(Self {
-            monitor,
-            origin: Cell::new(origin),
-            source: Cell::new((0, 0, 0, 0)),
-            pool,
-            session,
-            token,
-            rate_hz: Cell::new(rate_hz),
-            borderless: Cell::new(borderless),
-            magnifier,
-        })
-    }
-}
-
-impl Drop for Session {
-    fn drop(&mut self) {
-        let _ = self.pool.RemoveFrameArrived(self.token);
-        let _ = self.session.Close();
-        let _ = self.pool.Close();
-    }
-}
-
-impl Shared {
-    fn receive_pixels(&self, frame: magnifier::PixelFrame) {
-        {
-            let mut latest = self.latest.lock();
-            if let Some(Frame::Pixels(previous)) = latest.frame.as_ref()
-                && previous.origin == frame.origin
-                && previous.width == frame.width
-                && previous.height == frame.height
-                && previous.pixels == frame.pixels
-            {
-                return;
-            }
-            latest.frame = Some(Frame::Pixels(Arc::new(frame)));
-            latest.sequence += 1;
-        }
-        if !self.pending.swap(true, Ordering::AcqRel) {
-            crate::window::wake();
-        }
-    }
-
-    fn probe_changed(&self, frame: &Direct3D11CaptureFrame, interest: Rect) -> bool {
-        let content = *self.content.lock();
-        let rect = Rect {
-            left: interest.left.max(0),
-            top: interest.top.max(0),
-            right: interest.right.min(content.Width),
-            bottom: interest.bottom.min(content.Height),
-        };
-        if rect.right <= rect.left || rect.bottom <= rect.top {
-            return false;
-        }
-        let mut probe = self.probe.lock();
-        if let Err(error) = self.sample(&mut probe, frame, rect) {
-            log::debug!("Backdrop change probe failed: {error}");
-            return true;
-        }
-        let changed = probe.rect != rect || probe.samples != probe.scratch;
-        let probe = &mut *probe;
-        std::mem::swap(&mut probe.samples, &mut probe.scratch);
-        probe.rect = rect;
-        changed
-    }
-
-    fn sample(
-        &self,
-        probe: &mut Probe,
-        frame: &Direct3D11CaptureFrame,
-        rect: Rect,
-    ) -> windows::core::Result<()> {
-        let AgileContext(device, context) = &self.d3d;
-        let width = (rect.right - rect.left) as u32;
-        let height = (rect.bottom - rect.top) as u32;
-        if probe
-            .staging
-            .as_ref()
-            .is_none_or(|(_, w, h)| *w < width || *h < height)
-        {
-            let desc = D3D11_TEXTURE2D_DESC {
-                Width: width.div_ceil(PROBE_ALIGN) * PROBE_ALIGN,
-                Height: height.div_ceil(PROBE_ALIGN) * PROBE_ALIGN,
-                MipLevels: 1,
-                ArraySize: 1,
-                Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                SampleDesc: DXGI_SAMPLE_DESC {
-                    Count: 1,
-                    Quality: 0,
-                },
-                Usage: D3D11_USAGE_STAGING,
-                CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
-                ..Default::default()
-            };
-            let mut texture = None;
-            // SAFETY: The descriptor is initialized and the output Option is owned by this call.
-            unsafe { device.CreateTexture2D(&desc, None, Some(&mut texture))? };
-            probe.staging = Some((
-                texture.ok_or_else(windows::core::Error::empty)?,
-                desc.Width,
-                desc.Height,
-            ));
-        }
-        let Some((staging, _, _)) = probe.staging.clone() else {
-            return Err(windows::core::Error::empty());
-        };
-        let source = frame_texture(frame)?;
-        let source_box = D3D11_BOX {
-            left: rect.left as u32,
-            top: rect.top as u32,
-            front: 0,
-            right: rect.right as u32,
-            bottom: rect.bottom as u32,
-            back: 1,
-        };
-        probe.scratch.clear();
-        // SAFETY: The box lies inside the frame, the staging texture is at least as large, and the
-        // mapped rows are read only within the copied width and height before unmapping.
-        unsafe {
-            context.CopySubresourceRegion(&staging, 0, 0, 0, 0, &source, 0, Some(&source_box));
-            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-            let mut attempts = 0;
-            loop {
-                match context.Map(
-                    &staging,
-                    0,
-                    D3D11_MAP_READ,
-                    D3D11_MAP_FLAG_DO_NOT_WAIT.0 as u32,
-                    Some(&mut mapped),
-                ) {
-                    Ok(()) => break,
-                    Err(error) if error.code() == DXGI_ERROR_WAS_STILL_DRAWING && attempts < 50 => {
-                        attempts += 1;
-                        std::thread::sleep(std::time::Duration::from_millis(1));
-                    }
-                    Err(error) => return Err(error),
-                }
-            }
-            let base = mapped.pData as *const u8;
-            for y in (0..height as usize).step_by(PROBE_STEP) {
-                let row = base.add(y * mapped.RowPitch as usize).cast::<u32>();
-                for x in (0..width as usize).step_by(PROBE_STEP) {
-                    probe.scratch.push(row.add(x).read_unaligned());
-                }
-            }
-            context.Unmap(&staging, 0);
-        }
-        Ok(())
-    }
-
-    fn receive(&self, pool: &Direct3D11CaptureFramePool) {
-        let mut newest = None;
-        let mut dirty: Option<Rect> = None;
-        let mut whole = false;
-        let mut unknown = false;
-        while let Ok(frame) = pool.TryGetNextFrame() {
-            match frame.DirtyRegions().and_then(|regions| {
-                let mut rects = Vec::new();
-                for index in 0..regions.Size()? {
-                    rects.push(regions.GetAt(index)?);
-                }
-                Ok(rects)
-            }) {
-                Ok(rects) => {
-                    for rect in rects {
-                        let rect = Rect {
-                            left: rect.X,
-                            top: rect.Y,
-                            right: rect.X + rect.Width,
-                            bottom: rect.Y + rect.Height,
-                        };
-                        dirty = Some(dirty.map_or(rect, |acc| union(acc, rect)));
-                    }
-                }
-                Err(_) => unknown = true,
-            }
-            newest = Some(frame);
-        }
-        let Some(frame) = newest else {
-            return;
-        };
-        if let Ok(size) = frame.ContentSize() {
-            let mut content = self.content.lock();
-            if size != *content {
-                *content = size;
-                let _ = pool.Recreate(
-                    &self.device.0,
-                    DirectXPixelFormat::B8G8R8A8UIntNormalized,
-                    FRAME_BUFFERS,
-                    size,
-                );
-                whole = true;
-            }
-        }
-        let interest = *self.interest.lock();
-        let relevant = whole
-            || dirty.is_some_and(|dirty| {
-                intersects(dirty, interest) && self.probe_changed(&frame, interest)
-            })
-            || (unknown && self.probe_changed(&frame, interest));
-        {
-            let mut latest = self.latest.lock();
-            latest.frame = Some(Frame::Window(frame));
-            if relevant {
-                latest.sequence += 1;
-            }
-        }
-        if relevant && !self.pending.swap(true, Ordering::AcqRel) {
-            crate::window::wake();
-        }
-    }
 }
 
 impl Drop for BackdropCapture {
     fn drop(&mut self) {
-        self.session.borrow_mut().take();
-        self.pixels.borrow_mut().take();
-        *self.shared.latest.lock() = Latest::default();
-        self.import.borrow_mut().take();
-        // SAFETY: hwnd may already be destroyed; the call fails harmlessly in that case.
-        let _ = unsafe { SetWindowDisplayAffinity(self.hwnd, WDA_NONE) };
-    }
-}
-
-fn set_rate(session: &GraphicsCaptureSession, rate_hz: u32) {
-    let interval = 10_000_000 / i64::from(rate_hz.clamp(1, 1000));
-    let _ = session.SetMinUpdateInterval(TimeSpan { Duration: interval });
-}
-
-fn frame_texture(frame: &Direct3D11CaptureFrame) -> windows::core::Result<ID3D11Texture2D> {
-    let access: IDirect3DDxgiInterfaceAccess = frame.Surface()?.cast()?;
-    // SAFETY: The surface wraps a live D3D11 texture owned by the frame.
-    unsafe { access.GetInterface() }
-}
-
-fn create_device(adapter_luid: u64) -> Result<(ID3D11Device5, ID3D11DeviceContext4), String> {
-    // SAFETY: DXGI returns an owned factory and adapter without retaining caller pointers.
-    let adapter: IDXGIAdapter = unsafe {
-        CreateDXGIFactory1::<IDXGIFactory4>().and_then(|factory| {
-            factory.EnumAdapterByLuid(LUID {
-                LowPart: adapter_luid as u32,
-                HighPart: (adapter_luid >> 32) as i32,
-            })
-        })
-    }
-    .map_err(|error| format!("Capture adapter lookup failed: {error}"))?;
-    let mut device: Option<ID3D11Device> = None;
-    let mut context: Option<ID3D11DeviceContext> = None;
-    // SAFETY: The adapter is live and both outputs are initialized Options owned by this call.
-    unsafe {
-        D3D11CreateDevice(
-            &adapter,
-            D3D_DRIVER_TYPE_UNKNOWN,
-            HMODULE::default(),
-            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-            Some(&[D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0]),
-            D3D11_SDK_VERSION,
-            Some(&mut device),
-            None,
-            Some(&mut context),
-        )
-    }
-    .map_err(|error| format!("Capture D3D11 device failed: {error}"))?;
-    let device = device.ok_or("Capture D3D11 device is missing")?;
-    let context = context.ok_or("Capture D3D11 context is missing")?;
-    if let Ok(multithread) = context.cast::<ID3D11Multithread>() {
-        // SAFETY: Enabling protection only serializes this device's immediate context.
-        let _ = unsafe { multithread.SetMultithreadProtected(true) };
-    }
-    Ok((
-        device
-            .cast()
-            .map_err(|error| format!("ID3D11Device5 is unavailable: {error}"))?,
-        context
-            .cast()
-            .map_err(|error| format!("ID3D11DeviceContext4 is unavailable: {error}"))?,
-    ))
-}
-
-fn union(a: Rect, b: Rect) -> Rect {
-    Rect {
-        left: a.left.min(b.left),
-        top: a.top.min(b.top),
-        right: a.right.max(b.right),
-        bottom: a.bottom.max(b.bottom),
+        self.shared.control.lock().stopped = true;
+        self.shared.changed.notify_one();
+        if let Some(worker) = self.worker.take()
+            && worker.join().is_err()
+        {
+            log::warn!("Desktop capture worker did not stop cleanly");
+        }
     }
 }
 
 fn intersection(a: Rect, b: Rect) -> Rect {
+    let left = a.left.max(b.left);
+    let top = a.top.max(b.top);
     Rect {
-        left: a.left.max(b.left),
-        top: a.top.max(b.top),
-        right: a.right.min(b.right).max(a.left.max(b.left)),
-        bottom: a.bottom.min(b.bottom).max(a.top.max(b.top)),
+        left,
+        top,
+        right: a.right.min(b.right).max(left),
+        bottom: a.bottom.min(b.bottom).max(top),
     }
 }
 
-fn intersects(a: Rect, b: Rect) -> bool {
-    a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
-}
-
-struct AgileDevice(IDirect3DDevice);
-
-struct AgileContext(ID3D11Device, ID3D11DeviceContext);
-
-// SAFETY: WinRT Direct3D devices are agile, and the wrapped D3D11 device has multithread
-// protection enabled before it is shared with the capture callback thread.
-unsafe impl Send for AgileDevice {}
-// SAFETY: See the Send implementation; the device is only used through thread-safe calls.
-unsafe impl Sync for AgileDevice {}
-
-// SAFETY: The device has multithread protection enabled, which serializes the immediate context
-// between the render thread and the capture callback thread.
-unsafe impl Send for AgileContext {}
-// SAFETY: See the Send implementation.
-unsafe impl Sync for AgileContext {}
-
-fn borderless_allowed() -> bool {
-    if !borderless_api_supported() {
-        BORDER_ACCESS.store(BORDER_REQUIRED, Ordering::Release);
-        return false;
-    }
-    if BORDER_ACCESS
-        .compare_exchange(
-            BORDER_UNKNOWN,
-            BORDER_PENDING,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        )
-        .is_ok()
-    {
-        let requested =
-            GraphicsCaptureAccess::RequestAccessAsync(GraphicsCaptureAccessKind::Borderless)
-                .and_then(|operation| {
-                    operation.when(|status| {
-                        let allowed = status
-                            .as_ref()
-                            .is_ok_and(|status| *status == AppCapabilityAccessStatus::Allowed);
-                        if !allowed {
-                            log::info!("Borderless screen capture is not allowed: {status:?}");
-                        }
-                        BORDER_ACCESS.store(
-                            if allowed {
-                                BORDER_OPTIONAL
-                            } else {
-                                BORDER_REQUIRED
-                            },
-                            Ordering::Release,
-                        );
-                        crate::window::wake();
-                    })
-                });
-        if let Err(error) = requested {
-            log::info!("Borderless screen capture is unavailable: {error}");
-            BORDER_ACCESS.store(BORDER_REQUIRED, Ordering::Release);
-        }
-    }
-    BORDER_ACCESS.load(Ordering::Acquire) == BORDER_OPTIONAL
-}
-
-fn border_access_required() -> bool {
-    BORDER_ACCESS.load(Ordering::Acquire) == BORDER_REQUIRED
-}
-
-fn borderless_api_supported() -> bool {
-    ApiInformation::IsPropertyPresent(
-        &HSTRING::from("Windows.Graphics.Capture.GraphicsCaptureSession"),
-        &HSTRING::from("IsBorderRequired"),
-    )
-    .unwrap_or(false)
-}
-
-fn hide_border(session: &GraphicsCaptureSession) {
-    if let Err(error) = session.SetIsBorderRequired(false) {
-        log::warn!("Screen capture border could not be hidden: {error}");
-    }
-}
-
-fn exclude_from_capture(hwnd: HWND) -> Result<(), String> {
-    // SAFETY: hwnd is the caller's live overlay window on this thread.
-    unsafe { SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) }
-        .map_err(|error| format!("Capture exclusion failed: {error}"))
-}
-
-/// Clips a screen rectangle to the overlay's monitor; the magnifier image callback is only fed
-/// on-screen sources.
-fn monitor_clamped(hwnd: HWND, rect: Rect) -> Option<RECT> {
-    // SAFETY: hwnd is the live overlay window; the call only reads its placement.
-    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
-    let mut info = MONITORINFO {
-        cbSize: size_of::<MONITORINFO>() as u32,
-        ..Default::default()
-    };
-    // SAFETY: monitor came from MonitorFromWindow and info is a correctly sized output.
-    if !unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
-        return None;
-    }
-    let bounds = info.rcMonitor;
-    let clamped = RECT {
-        left: rect.left.max(bounds.left),
-        top: rect.top.max(bounds.top),
-        right: rect.right.min(bounds.right),
-        bottom: rect.bottom.min(bounds.bottom),
-    };
-    (clamped.right > clamped.left && clamped.bottom > clamped.top).then_some(clamped)
-}
-
-fn relative(rect: Rect, origin: (i32, i32)) -> Rect {
-    Rect {
-        left: rect.left - origin.0,
-        top: rect.top - origin.1,
-        right: rect.right - origin.0,
-        bottom: rect.bottom - origin.1,
-    }
-}
-
-fn window_rect(hwnd: HWND) -> Result<RECT, String> {
-    let mut rect = RECT::default();
-    // SAFETY: hwnd is the live overlay window and rect is a valid output.
-    unsafe { GetWindowRect(hwnd, &mut rect) }
-        .map_err(|error| format!("Overlay bounds are unavailable: {error}"))?;
-    if rect.right <= rect.left || rect.bottom <= rect.top {
-        return Err("Overlay bounds are empty".to_string());
-    }
-    Ok(rect)
+fn rect_size(rect: Rect) -> Option<(u32, u32)> {
+    let width = u32::try_from(i64::from(rect.right) - i64::from(rect.left)).ok()?;
+    let height = u32::try_from(i64::from(rect.bottom) - i64::from(rect.top)).ok()?;
+    (width > 0 && height > 0).then_some((width, height))
 }

@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+harfrust = "0.15"
 image = "0.25"
 log = { version = "0.4", features = ["std"] }
 skia-safe = { version = "0.99.0", features = ["d3d"] }
@@ -18,4 +19,5 @@ windows = { version = "0.62.2", features = [
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Security",
+    "Win32_System_Threading",
 ] }

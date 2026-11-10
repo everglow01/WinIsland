@@ -5,21 +5,25 @@ edition = "2024"
 
 [workspace]
 members = [
-    "crates/pollkit",
-    "crates/settings-schema",
-    "crates/settings-schema-derive",
+    "crates/winisland-utils",
+    "crates/winisland-utils/derive",
     "crates/winisland-core",
     "crates/winisland-plugin-api",
-    "crates/winisland-plugin-calendar",
+    "crates/winisland-builtin-plugins",
     "crates/winisland-plugin-package",
     "crates/winisland-plugin-host",
     "crates/winisland-render",
     "crates/winisland-platform",
     "crates/winisland-platform-windows",
+    "crates/winisland-lingosoul",
 ]
 
 [workspace.package]
-version = "2.0.0"
+version = "2.0.1"
+
+[features]
+default = ["lingosoul"]
+lingosoul = ["dep:winisland-lingosoul"]
 
 [dependencies]
 base64 = "0.23.1"
@@ -47,15 +51,15 @@ log = { version = "0.4", features = ["std"] }
 lrc = "0.2.0"
 parking_lot = "0.12"
 winisland-plugin-api = { path = "crates/winisland-plugin-api" }
-winisland-plugin-calendar = { path = "crates/winisland-plugin-calendar" }
+winisland-builtin-plugins = { path = "crates/winisland-builtin-plugins" }
 winisland-plugin-package = { path = "crates/winisland-plugin-package", features = ["marketplace"] }
 winisland-plugin-host = { path = "crates/winisland-plugin-host" }
 winisland-core = { path = "crates/winisland-core" }
 winisland-render = { path = "crates/winisland-render" }
 winisland-platform = { path = "crates/winisland-platform" }
 winisland-platform-windows = { path = "crates/winisland-platform-windows" }
-pollkit = { path = "crates/pollkit" }
-settings-schema = { path = "crates/settings-schema" }
+winisland-lingosoul = { path = "crates/winisland-lingosoul", optional = true }
+winisland-utils = { path = "crates/winisland-utils" }
 zip = "8.6.0"
 serde_yaml = "0.9"
 pulldown-cmark = { version = "0.13.4", default-features = false }

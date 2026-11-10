@@ -1,15 +1,20 @@
 use std::time::Instant;
 
-use winisland_core::context::{Activity, ActivityContent, Priority};
+use winisland_core::context::{Activity, ActivityContent, ActivityProgress, Priority};
 
-use crate::ui::compact::timer::{TimerContent, countdown_width};
 use crate::ui::expanded::pager::ExpandedPage;
 use crate::ui::island::MiniContent;
 
 use super::App;
 
 const MUSIC_ACTIVITY: u64 = 1;
-const TIMER_ACTIVITY: u64 = 2;
+
+/// A secondary plugin activity that yields the compact island to other content.
+#[derive(Clone, Copy)]
+pub(super) struct SecondaryIndicator {
+    pub page: Option<u64>,
+    pub progress: ActivityProgress,
+}
 
 impl App {
     pub(super) fn resize_activity_window(&self) {
@@ -22,7 +27,7 @@ impl App {
     }
 
     pub(super) fn update_local_activities(&mut self, music_active: bool, playing: bool) -> bool {
-        let mut changed = Self::sync_local_activity(
+        Self::sync_local_activity(
             &mut self.activity_mgr,
             MUSIC_ACTIVITY,
             music_active,
@@ -33,34 +38,21 @@ impl App {
             },
             playing,
             0.0,
-        );
-        let timer = crate::ui::expanded::timer_view::compact_content();
-        let display = |timer: TimerContent| (timer.remaining_secs(), timer.total, timer.paused);
-        changed |= self.timer_content.map(display) != timer.map(display);
-        self.timer_content = timer;
-        let plugin_widths = crate::ui::plugin::compact_widths(self.plugin_host.as_deref());
-        let shares_island = self
-            .activity_mgr
-            .current_excluding(TIMER_ACTIVITY)
-            .is_some()
+        )
+    }
+
+    /// Whether another activity, compact widget, or compact surface occupies the island.
+    pub(super) fn compact_island_shared(&self, excluding: u64) -> bool {
+        self.activity_mgr.current_excluding(excluding).is_some()
             || self
                 .config
                 .compact_widget_layout
                 .iter()
                 .any(|slot| slot.widget.is_some())
-            || plugin_widths.0 + plugin_widths.1 > 0.0;
-        let timer_orb = timer.is_some() && shares_island;
-        changed |= self.timer_orb != timer_orb;
-        self.timer_orb = timer_orb;
-        changed |= Self::sync_local_activity(
-            &mut self.activity_mgr,
-            TIMER_ACTIVITY,
-            timer.is_some() && !timer_orb,
-            Priority::Medium,
-            true,
-            timer.map_or(0.0, |timer| countdown_width(timer, self.config.base_width)),
-        );
-        changed
+            || {
+                let (left, right) = crate::ui::plugin::compact_widths(self.plugin_host.as_deref());
+                left + right > 0.0
+            }
     }
 
     fn sync_local_activity(
@@ -84,6 +76,8 @@ impl App {
             content: ActivityContent::Local,
             show_compact: true,
             keep_visible,
+            secondary: false,
+            progress: None,
             preferred_width,
             preferred_height: 0.0,
             page: None,
@@ -93,19 +87,15 @@ impl App {
     }
 
     pub(super) fn mini_content(&self) -> Option<MiniContent<'_>> {
-        Self::mini_content_for(&self.activity_mgr, self.timer_content)
+        Self::mini_content_for(&self.activity_mgr)
     }
 
     pub(super) fn mini_content_for(
         manager: &winisland_core::context::ActivityManager,
-        timer: Option<TimerContent>,
     ) -> Option<MiniContent<'_>> {
         let activity = manager.current()?;
         match &activity.content {
             ActivityContent::Local if activity.id == MUSIC_ACTIVITY => Some(MiniContent::Music),
-            ActivityContent::Local if activity.id == TIMER_ACTIVITY => {
-                timer.map(MiniContent::Timer)
-            }
             ActivityContent::Local => None,
             ActivityContent::Text(text) => Some(MiniContent::Text(text)),
             ActivityContent::Surface(id) => Some(MiniContent::Surface(*id)),
@@ -116,7 +106,6 @@ impl App {
         let activity = self.activity_mgr.current()?;
         let page = match activity.content {
             ActivityContent::Local if activity.id == MUSIC_ACTIVITY => ExpandedPage::Music,
-            ActivityContent::Local if activity.id == TIMER_ACTIVITY => ExpandedPage::Timer,
             _ => ExpandedPage::Plugin(activity.page?),
         };
         self.expanded_pages().contains(&page).then_some(page)

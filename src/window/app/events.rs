@@ -1,4 +1,5 @@
 use std::time::{Duration, Instant};
+use winisland_utils::timing::take_elapsed;
 
 use winisland_platform::{
     AppHandler, BackdropShape, HostBackdropParams, InputState, MouseButton, PlatformEvent, Theme,
@@ -38,7 +39,7 @@ impl App {
                     if self.tray_installed {
                         let _ = crate::platform::shell().tray_update(
                             crate::platform::tray_theme(is_light),
-                            crate::platform::tray_labels(self.visible, self.recorder.is_some()),
+                            crate::platform::tray_labels(self.visible),
                         );
                     }
                 }
@@ -163,12 +164,24 @@ impl App {
                     }
                 }
                 PlatformEvent::RedrawRequested { .. } => {
+                    if let Some(renderer) = &mut self.renderer {
+                        let target = renderer.main_target();
+                        match renderer.prepare_frame(target) {
+                            Ok(true) => {}
+                            Ok(false) => return,
+                            Err(error) => {
+                                self.invalidate_renderer(&error.to_string(), Instant::now());
+                                return;
+                            }
+                        }
+                    }
                     let island_layout = self.compute_island_layout();
                     let is_hidden = self.is_hidden();
                     if let Some(mut renderer) = self.renderer.take() {
-                        let dt =
-                            (self.last_render_time.elapsed().as_secs_f32() * 60.0).clamp(0.1, 6.0);
-                        self.last_render_time = Instant::now();
+                        let dt = (take_elapsed(&mut self.last_render_time, Instant::now())
+                            .as_secs_f32()
+                            * 60.0)
+                            .clamp(0.1, 6.0);
                         let sigmas = if self.config.motion_blur {
                             calculate_blur_sigmas(
                                 self.springs.w.velocity,
@@ -312,7 +325,7 @@ impl App {
                         let mini_content = if compact_components_hidden {
                             None
                         } else {
-                            Self::mini_content_for(&self.activity_mgr, self.timer_content)
+                            Self::mini_content_for(&self.activity_mgr)
                         };
                         let attention_alpha = if self.fullscreen_hide_active()
                             && self.hide.fullscreen
@@ -386,49 +399,9 @@ impl App {
                             secondary_task,
                         );
                         let surface_bounds = surface.outline.bounds();
-                        let outline = secondary_task
-                            .filter(|_| {
-                                self.host_backdrop
-                                    && matches!(
-                                        self.config.island_style.as_str(),
-                                        "glass" | "dynamic"
-                                    )
-                            })
-                            .map(|_| {
-                                surface.outline.clip_segments(winisland_render::Point::new(
-                                    surface_bounds.left,
-                                    surface_bounds.top,
-                                ))
-                            });
                         let liquid_scale = self.config.compact_scale
                             + (self.config.expanded_scale - self.config.compact_scale)
                                 * progress.clamp(0.0, 1.0);
-                        let host_backdrop = super::system::update_host_backdrop(
-                            &mut self.host_backdrop,
-                            win.id(),
-                            HostBackdropParams {
-                                enabled: matches!(
-                                    self.config.island_style.as_str(),
-                                    "glass" | "dynamic"
-                                ),
-                                screen_x: self.geom.win_x as f32 + surface_bounds.left,
-                                screen_y: self.geom.win_y as f32 + surface_bounds.top,
-                                width: surface_bounds.width(),
-                                height: surface_bounds.height(),
-                                radius: self.springs.r.value,
-                                outline,
-                                extras: if self.config.island_style == "liquid" {
-                                    [None, None]
-                                } else {
-                                    pager_backdrop
-                                },
-                                blur: if self.config.island_style == "glass" {
-                                    self.config.glass_blur * liquid_scale
-                                } else {
-                                    0.0
-                                },
-                            },
-                        );
                         let (win_x, win_y) = (self.geom.win_x as f32, self.geom.win_y as f32);
                         let liquid_interest = pager_backdrop.iter().flatten().fold(
                             surface_bounds,
@@ -466,6 +439,8 @@ impl App {
                         } else {
                             liquid_interest
                         };
+                        let liquid_active =
+                            self.config.island_style == "liquid" || self.lingosoul.needs_backdrop();
                         let backdrop_ready = super::system::update_backdrop_capture(
                             &mut self.backdrop_capture,
                             &mut renderer,
@@ -473,34 +448,67 @@ impl App {
                                 window: self.window,
                                 origin: (self.geom.win_x, self.geom.win_y),
                                 frame_interval: self.display_frame_interval,
-                                interest: if self.recorder.is_some() {
-                                    let size = win.inner_size();
-                                    winisland_render::Rect::from_xywh(
-                                        0.0,
-                                        0.0,
-                                        size.width as f32,
-                                        size.height as f32,
-                                    )
-                                } else {
-                                    liquid_interest
-                                },
+                                interest: liquid_interest,
                                 frost_sigma: self.config.liquid_glass_blur
                                     * liquid_scale
                                     * (1.0 - 0.85 * self.lingosoul.style().drop),
-                                active: self.recorder.is_some()
-                                    || self.config.island_style == "liquid"
-                                    || self.lingosoul.needs_backdrop(),
-                                animating: self.recorder.is_some()
-                                    || self.springs.any_animating()
+                                active: liquid_active,
+                                animating: self.springs.any_animating()
                                     || self.lingosoul.is_animating(),
-                                visible_to_capture: self.config.liquid_glass_compat_capture,
                             },
                         );
-                        self.lingosoul.set_glass_ready(backdrop_ready);
+                        let island_style = if liquid_active && !backdrop_ready {
+                            "glass"
+                        } else {
+                            self.config.island_style.as_str()
+                        };
+                        let outline = secondary_task
+                            .filter(|_| {
+                                self.host_backdrop && matches!(island_style, "glass" | "dynamic")
+                            })
+                            .map(|_| {
+                                surface.outline.clip_segments(winisland_render::Point::new(
+                                    surface_bounds.left,
+                                    surface_bounds.top,
+                                ))
+                            });
+                        let host_backdrop = super::system::update_host_backdrop(
+                            &mut self.host_backdrop,
+                            win.id(),
+                            HostBackdropParams {
+                                enabled: matches!(island_style, "glass" | "dynamic"),
+                                screen_x: self.geom.win_x as f32 + surface_bounds.left,
+                                screen_y: self.geom.win_y as f32 + surface_bounds.top,
+                                width: surface_bounds.width(),
+                                height: surface_bounds.height(),
+                                radius: self.springs.r.value,
+                                outline,
+                                extras: if island_style == "liquid" {
+                                    [None, None]
+                                } else {
+                                    pager_backdrop
+                                },
+                                blur: if island_style == "glass" {
+                                    self.config.glass_blur * liquid_scale
+                                } else {
+                                    0.0
+                                },
+                            },
+                        );
+                        self.lingosoul.set_glass_ready(
+                            backdrop_ready
+                                || matches!(
+                                    self.backdrop_capture,
+                                    super::BackdropCaptureState::Failed(_)
+                                ),
+                        );
                         let main_target = renderer.main_target();
                         let render_result =
                             renderer.frame(main_target, |drawing_context, painter| {
+                                let liquid_backdrop =
+                                    backdrop_ready.then(|| drawing_context.backdrop()).flatten();
                                 draw_island(
+                                    drawing_context,
                                     painter,
                                     crate::ui::island::DrawIslandParams {
                                         layout: crate::ui::island::LayoutParams {
@@ -543,8 +551,13 @@ impl App {
                                         },
                                         lyrics: crate::ui::island::LyricsParams {
                                             current_lyric: &self.lyrics.current_text,
+                                            current_font_family: self
+                                                .lyrics
+                                                .current_font_family
+                                                .as_deref(),
                                             current_secondary_lyric,
                                             old_lyric: &self.lyrics.old_text,
+                                            old_font_family: self.lyrics.old_font_family.as_deref(),
                                             old_secondary_lyric,
                                             lyric_highlight: self.lyrics.highlight,
                                             lyric_transition: self.lyrics.transition,
@@ -555,12 +568,9 @@ impl App {
                                             lyric_side_gap: self.config.lyrics_side_gap,
                                         },
                                         style: crate::ui::island::StyleParams {
-                                            island_style: &self.config.island_style,
+                                            island_style,
                                             host_backdrop,
-                                            liquid_backdrop: (self.config.island_style == "liquid"
-                                                || self.lingosoul.needs_backdrop())
-                                            .then(|| drawing_context.backdrop())
-                                            .flatten(),
+                                            liquid_backdrop,
                                             liquid_optics: crate::ui::island::LiquidOptics {
                                                 refraction: self.config.liquid_glass_refraction
                                                     / 100.0,
@@ -714,6 +724,7 @@ impl AppHandler for App {
         self.on_about_to_wait();
         let mut deadline = self.next_frame_deadline;
         let mut precise = self.precise_frame_pacing;
+        let mut auxiliary_active = false;
         if let Some(settings_deadline) = self
             .settings
             .as_mut()
@@ -721,6 +732,7 @@ impl AppHandler for App {
         {
             deadline = deadline.min(settings_deadline);
             precise = true;
+            auxiliary_active = true;
         }
         if let Some(guide_deadline) = self
             .guide
@@ -729,12 +741,15 @@ impl AppHandler for App {
         {
             deadline = deadline.min(guide_deadline);
             precise = true;
+            auxiliary_active = true;
         }
         self.handle_plugin_settings_request();
+        self.memory.update(Instant::now(), auxiliary_active);
         self.window.map(|_| WakeDeadline { deadline, precise })
     }
 
     fn on_exit(&mut self) {
+        self.shutdown_assistant();
         self.device_feed = None;
         let _ = crate::platform::shell().set_plugin_commands(&[]);
         if let Some(host) = &self.plugin_host {
@@ -742,7 +757,6 @@ impl AppHandler for App {
         }
         self.close_settings();
         self.close_guide();
-        self.stop_recording();
         self.stop_backdrop_capture();
         if let Some(window_ref) = self.window.take() {
             window().release_host_backdrop(window_ref.id());

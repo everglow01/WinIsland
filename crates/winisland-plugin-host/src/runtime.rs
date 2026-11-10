@@ -37,10 +37,17 @@ pub struct HostRuntime {
     _pin: PhantomPinned,
 }
 
-/// Each lyric transformer's owner and whether it writes secondary text, kept outside the service
+/// Each lyric transformer's owner and output kind, kept outside the service
 /// state so the lyrics bridge can skip plugins without a transformer of the requested kind
 /// instead of queueing behind their other work.
-pub(crate) type LyricsKinds = Arc<Mutex<HashMap<u64, (PluginToken, bool)>>>;
+pub(crate) type LyricsKinds = Arc<Mutex<HashMap<u64, (PluginToken, LyricsKind)>>>;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LyricsKind {
+    Text,
+    Secondary,
+    FontFamily,
+}
 
 #[derive(Clone, Copy)]
 pub struct SystemServices {
@@ -65,6 +72,8 @@ pub(crate) struct ServiceState {
     pub host_state: HostStateV2,
     pub subscriptions: HashMap<u64, SubscriptionRecord>,
     pub disabled_widgets: Vec<WidgetId>,
+    pub alert: Option<AlertRecord>,
+    pub alert_revision: u64,
 }
 
 pub(crate) struct ContextRecord {
@@ -75,6 +84,23 @@ pub(crate) struct ContextRecord {
 pub(crate) struct ActivityRecord {
     pub spec: winisland_plugin_api::ActivitySpecV2,
     pub updated_at: Instant,
+    pub status: Option<ActivityStatusRecord>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ActivityStatusRecord {
+    pub remaining_ms: u64,
+    pub total_ms: u64,
+    pub paused: bool,
+    pub sampled_at: Instant,
+}
+
+pub(crate) struct AlertRecord {
+    pub token: PluginToken,
+    pub title: String,
+    pub body: String,
+    pub icon: String,
+    pub dismissed: bool,
 }
 
 pub(crate) struct WidgetRecord {
@@ -118,7 +144,7 @@ pub(crate) struct TranslationBundle {
 pub struct LyricsRecord {
     pub on_transform: LyricsTransformFnV2,
     pub callback_data: usize,
-    pub secondary: bool,
+    pub kind: LyricsKind,
     pub in_flight: u32,
 }
 
@@ -175,6 +201,8 @@ impl HostRuntime {
                 host_state: HostStateV2::default(),
                 subscriptions: HashMap::new(),
                 disabled_widgets: Vec::new(),
+                alert: None,
+                alert_revision: 0,
             }),
             store_root,
             store_lock: Mutex::new(()),
@@ -276,6 +304,7 @@ impl HostRuntime {
         &self,
         token: PluginToken,
         widget: WidgetId,
+        previous: Option<&PreparedFrame>,
     ) -> Result<Option<PreparedFrame>, WidgetFrameError> {
         use crate::resources::ResourceKind;
         let bytes = self
@@ -288,13 +317,29 @@ impl HostRuntime {
         if bytes.is_empty() {
             return Ok(None);
         }
-        let result = validate(&bytes, |id| {
+        let image_valid = |id| {
             self.resources
                 .require(token, ResourceKind::Image, id)
                 .is_ok()
-        })
-        .map_err(|error| error.reason)
-        .and_then(|validated| prepare(&validated, |id| self.image(token, id).ok()));
+        };
+        let cached = previous.is_some_and(|frame| {
+            frame
+                .source
+                .as_ref()
+                .is_some_and(|source| Arc::ptr_eq(source, &bytes))
+                && frame.image_ids.iter().copied().all(image_valid)
+        });
+        let result = if cached {
+            Ok(None)
+        } else {
+            validate(&bytes, image_valid)
+                .map_err(|error| error.reason)
+                .and_then(|validated| prepare(&validated, |id| self.image(token, id).ok()))
+                .map(|mut frame| {
+                    frame.source = Some(Arc::clone(&bytes));
+                    Some(frame)
+                })
+        };
         let mut state = self.state.lock().map_err(|_| WidgetFrameError {
             reason: "plugin state lock is poisoned",
             consecutive_failures: 0,
@@ -317,14 +362,14 @@ impl HostRuntime {
         }
         if !Arc::ptr_eq(&record.draw_list, &bytes) {
             return match result {
-                Ok(frame) => Ok(Some(frame)),
+                Ok(frame) => Ok(frame),
                 Err(_) => Ok(None),
             };
         }
         match result {
             Ok(frame) => {
                 record.failures = 0;
-                Ok(Some(frame))
+                Ok(frame)
             }
             Err(reason) => {
                 record.failures = record.failures.saturating_add(1);
@@ -383,6 +428,14 @@ impl HostRuntime {
         self.extensions.revoke(token);
         let mut state = self.state.lock().map_err(|_| PluginStatus::Internal)?;
         let revoked = self.resources.revoke_plugin(token)?;
+        if state
+            .alert
+            .as_ref()
+            .is_some_and(|alert| alert.token == token)
+        {
+            state.alert = None;
+            state.alert_revision = state.alert_revision.wrapping_add(1);
+        }
         let mut translations = Vec::new();
         for (id, kind) in &revoked {
             match kind {

@@ -92,6 +92,10 @@ impl App {
                         PluginStatus::StaleHandle
                     }
                 }
+                HostRequest::Toast { title, body } => {
+                    Self::show_toast(&title, &body);
+                    PluginStatus::Ok
+                }
                 HostRequest::Command { name, .. } => match name.as_str() {
                     "winisland.expand" => {
                         self.expanded = true;
@@ -137,6 +141,29 @@ impl App {
             };
             extensions.complete(request.token, request.sequence, status);
         }
+        let (alert_revision, alert) = host.alert_snapshot();
+        if alert_revision != self.plugin_alert_revision {
+            self.plugin_alert_revision = alert_revision;
+            match alert {
+                Some(alert) => {
+                    if !self.visible || self.fullscreen_hide_active() {
+                        Self::show_toast(&alert.title, &alert.body);
+                        host.dismiss_alert();
+                    } else {
+                        self.compact_overlay.show_alert(alert.title, &alert.icon);
+                        self.expanded = false;
+                        self.reset_page();
+                        if self.is_hidden() {
+                            self.reveal_island();
+                        }
+                    }
+                    self.idle_timer = Instant::now();
+                }
+                None => {
+                    self.compact_overlay.dismiss_alert();
+                }
+            }
+        }
         let pages = self.expanded_pages();
         if pages != self.plugin_ui.pages {
             if !pages.contains(&self.current_page) {
@@ -153,7 +180,6 @@ impl App {
             page: match self.current_page {
                 ExpandedPage::Music => 1,
                 ExpandedPage::Widgets => 2,
-                ExpandedPage::Timer => 4,
                 ExpandedPage::Plugin(id) => {
                     if host.surface_id(
                         crate::plugin::calendar::ID,

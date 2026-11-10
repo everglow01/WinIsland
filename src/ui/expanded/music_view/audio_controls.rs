@@ -878,7 +878,7 @@ pub(super) fn draw_output_list(params: OutputListParams<'_>) {
 }
 
 fn fit_text(
-    fonts: &FontManager,
+    fonts: &FontManager<'_>,
     text: &str,
     size: f32,
     weight: FontWeight,

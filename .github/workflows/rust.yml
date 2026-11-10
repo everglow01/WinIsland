@@ -67,8 +67,12 @@ jobs:
     - name: Install dependencies
       run: |
         choco install ninja innosetup -y
+    - name: Prepare speech runtime
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: ./packaging/Prepare-SpeechRuntime.ps1
     - name: Build Release
-      run: cargo build --release --verbose
+      run: cargo build --release --features lingosoul --verbose
       env:
         WINISLAND_PACKAGE_CHANNEL: nightly
         WINISLAND_BUILD_NUMBER: ${{ github.run_number }}

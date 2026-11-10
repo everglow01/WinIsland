@@ -58,7 +58,8 @@ impl SettingsApp {
             BuiltinPage::Behavior => self.build_behavior_page().into_items(),
             BuiltinPage::Alerts => self.build_alerts_page().into_items(),
             BuiltinPage::Music => self.build_music_items(),
-            BuiltinPage::LingoSoul => self.build_lingosoul_page(false).into_items(),
+            #[cfg(feature = "lingosoul")]
+            BuiltinPage::LingoSoul => self.build_lingosoul_items(),
             BuiltinPage::Widgets | BuiltinPage::Plugins | BuiltinPage::About => Vec::new(),
         }
     }
@@ -68,7 +69,7 @@ impl SettingsApp {
         let mut results = Vec::new();
         if !needle.is_empty() {
             let matches = |text: &str| text.to_lowercase().contains(&needle);
-            for page in BuiltinPage::ALL {
+            for &page in BuiltinPage::ALL {
                 let index = page as usize;
                 let title = tr(page.title_key());
                 if matches(&title) {

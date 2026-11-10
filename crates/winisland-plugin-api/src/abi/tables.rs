@@ -1,7 +1,7 @@
 use crate::types::v2::{
-    ActivitySpecV2, AssistantToolSpecV2, CommandExecuteFnV2, CommandInfoV2, CommandSpecV2,
-    EventSubscriptionV2, InputRegionV2, IslandStateV2, LocalDateTimeV2, LunarDateV2,
-    MediaSessionV2, SurfaceSpecV2, TimerSpecV2,
+    ActivitySpecV2, ActivityStatusV2, AlertSpecV2, AlertStateV2, AssistantToolSpecV2,
+    CommandExecuteFnV2, CommandInfoV2, CommandSpecV2, EventSubscriptionV2, InputRegionV2,
+    IslandStateV2, LocalDateTimeV2, LunarDateV2, MediaSessionV2, SurfaceSpecV2, TimerSpecV2,
 };
 use std::ffi::c_void;
 
@@ -432,4 +432,39 @@ pub struct SystemApiV2 {
     pub current_language: Option<
         unsafe extern "C" fn(*mut c_void, PluginToken, *mut u8, u32, *mut u32) -> PluginStatus,
     >,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NotificationApiV2 {
+    pub prefix: TablePrefix,
+    /// Shows a system toast with the given title and body.
+    pub toast: Option<
+        unsafe extern "C" fn(*mut c_void, PluginToken, Utf8Slice, Utf8Slice) -> PluginStatus,
+    >,
+    /// Asks the host to raise a compact alert card, replacing any earlier one.
+    pub alert:
+        Option<unsafe extern "C" fn(*mut c_void, PluginToken, *const AlertSpecV2) -> PluginStatus>,
+    /// Removes the caller's alert, or leaves it alone when another plugin owns it.
+    pub dismiss_alert: Option<unsafe extern "C" fn(*mut c_void, PluginToken) -> PluginStatus>,
+    /// Reports whether the caller's alert is still on screen.
+    pub alert_state:
+        Option<unsafe extern "C" fn(*mut c_void, PluginToken, *mut AlertStateV2) -> PluginStatus>,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct IndicatorApiV2 {
+    pub prefix: TablePrefix,
+    /// Publishes the countdown the host draws in its compact activity indicator.
+    pub set: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            PluginToken,
+            ResourceId,
+            *const ActivityStatusV2,
+        ) -> PluginStatus,
+    >,
+    /// Stops drawing the indicator for that activity.
+    pub clear: Option<unsafe extern "C" fn(*mut c_void, PluginToken, ResourceId) -> PluginStatus>,
 }

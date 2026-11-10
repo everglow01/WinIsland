@@ -8,7 +8,7 @@ This policy explains how WinIsland handles information. It applies to every WinI
 
 - WinIsland is a desktop application with no WinIsland accounts, advertising, analytics, telemetry, or crash reporting service.
 - Optional network features contact the services described below. WinIsland does not upload your information to a project telemetry service.
-- Update checks, online lyrics, the plugin marketplace, and the optional LingoSoul assistant use the network. Remote AI services and external agents process assistant messages according to their own settings and privacy policies.
+- Update checks, online lyrics, the plugin marketplace, and the optional LingoSoul assistant use the network. Configured AI services process assistant messages according to their own settings and privacy policies.
 
 ## Information processed on your device
 
@@ -33,11 +33,12 @@ WinIsland reads the following information to display it on the island. It is pro
 | `%USERPROFILE%\.winisland\logs\` | Diagnostic logs. They may contain track titles and artists, lyrics lookups, and error messages. Logs are never uploaded automatically. If you attach them to an issue, review them first |
 | `%USERPROFILE%\.winisland\updates\` | Installers downloaded by the updater |
 | `%APPDATA%\WinIsland\plugins\` | Installed plugins and their files |
-| `%USERPROFILE%\.winisland-lingosoul\config.toml` | LingoSoul settings, including the configured AI endpoint, API key, and external agent settings |
+| `%USERPROFILE%\.winisland-lingosoul\config.toml` | LingoSoul settings, including the custom AI endpoint, API key, local Agent permissions, working directory, and additional read-only directories |
 | `%USERPROFILE%\.winisland-lingosoul\history.jsonl` | LingoSoul conversation history. Retention and clearing are available in the LingoSoul settings |
-| `%LOCALAPPDATA%\LingoSoul\` | The downloaded assistant, its installed version, and `agent.log` diagnostic output |
+| `%USERPROFILE%\.winisland-lingosoul\prompts\` | Editable assistant instructions and response styles |
+| `%LOCALAPPDATA%\WinIsland\lingosoul\models\` | Speech models and resumable downloads |
 
-These are the default locations. `LINGOSOUL_CONFIG` can move the assistant configuration and its adjacent history file. Stop WinIsland and LingoSoul before removing their files. External agents and AI providers manage their own data separately; deleting local files does not delete data held by those services. Do not attach assistant configuration files containing API keys to issues.
+These are the default locations. `LINGOSOUL_CONFIG` can move the assistant configuration, history and default prompts. `LINGOSOUL_MODELS` can select a model directory; existing models under `%LOCALAPPDATA%\LingoSoul\models\` can also be reused. Stop WinIsland before removing its files. AI providers manage their own data separately; deleting local files does not delete data held by those services. Do not attach assistant configuration files containing API keys to issues.
 
 ## Network connections
 
@@ -65,11 +66,13 @@ When you open the plugin marketplace or install a plugin from it, WinIsland down
 
 ### LingoSoul assistant
 
-LingoSoul is optional and runs as a separate process. WinIsland sends the messages you type to it and displays its responses. Voice mode uses microphone input in the assistant. Installing or updating LingoSoul downloads its program from GitHub; speech features also download models.
+LingoSoul is an optional component running inside WinIsland. Builds without the `lingosoul` feature do not include its runtime or settings page. In builds that include it, **Enable LingoSoul** controls the assistant. Voice input uses the microphone and local speech models; audio is processed in memory, and recognized text is sent to the configured AI endpoint. Speech models download from GitHub only when you use the model-download control.
 
-The selected AI service or external agent handles assistant requests and conversation context. A remote endpoint sends this data to its operator; a local model endpoint is also supported. External agents can access the selected work folder according to the permissions you configure, and their own network and storage policies apply.
+The custom AI endpoint receives your messages, conversation context and tool results. A local model endpoint is also supported. Built-in tools and WinIsland plugin tools are available to the assistant. Weather requests use Open-Meteo and, when a city is omitted, IPWhois (`ipwho.is`) for approximate IP-based location.
 
-You can stop LingoSoul and disable **Start LingoSoul with WinIsland** in its settings. The history retention and clear-history controls apply to the assistant's local history, not to records kept by AI services or external agents.
+The optional local Agent provides read, write, update and execute tools. File reads are limited to the working directory and additional read-only directories; writes and updates are limited to the working directory. Read content and command output can be sent to your configured AI endpoint as tool results. Execute permission launches commands with your Windows account permissions: the working directory is not an operating-system sandbox. External Agent clients and MCP servers are not used.
+
+Turn off **Enable LingoSoul** to stop the assistant. Local Agent permissions can be controlled separately. History retention and clear-history controls apply to local history, not to records kept by AI services. Closing the conversation panel keeps the conversation available through the multitask entry; it does not cancel ongoing work.
 
 ### Links you open
 
@@ -81,7 +84,7 @@ Plugins are extensions that you install yourself. They run with the same permiss
 
 ## Your choices
 
-You can turn off the features above in Settings and remove their local data as described above. For messages processed by a remote AI service or external agent, use that service's controls to manage its records. WinIsland cannot delete records held by those services.
+You can turn off the features above in Settings and remove their local data as described above. For messages processed by a remote AI service, use that service's controls to manage its records. WinIsland cannot delete records held by those services.
 
 ## Children's privacy
 

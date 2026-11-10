@@ -1,9 +1,9 @@
-use pollkit::Done;
 use windows::ApplicationModel::AppDisplayInfo;
 use windows::Storage::Streams::{DataReader, IRandomAccessStreamWithContentType};
 use windows::UI::Notifications::Management::UserNotificationListener;
 use windows::UI::Notifications::{KnownNotificationBindings, UserNotification};
 use winisland_platform::{IconBounds, NotificationIconData, NotificationPayload};
+use winisland_utils::poll::Done;
 
 const MAX_ICON_BYTES: u64 = 2 * 1024 * 1024;
 pub(super) fn read_notification(

@@ -8,8 +8,9 @@ pub(super) async fn fetch(
     title: &str,
     artist: &str,
     duration_secs: u64,
+    fuzzy: bool,
 ) -> Option<Arc<Vec<LyricLine>>> {
-    let query = SongQuery::new(title, artist, duration_secs);
+    let query = SongQuery::new(title, artist, duration_secs, fuzzy);
     for term in query.search_terms() {
         if let Some(lyrics) = fetch_inner(&query, &term).await {
             return Some(lyrics);
@@ -152,6 +153,7 @@ fn parse_yrc_line(line: &str) -> Option<LyricLine> {
         time_ms,
         text,
         secondary_text: None,
+        font_family: None,
         timings,
     })
 }

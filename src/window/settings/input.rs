@@ -128,6 +128,7 @@ impl SettingsApp {
                 }
             }
             Some(BuiltinPage::Plugins) => self.handle_plugin_click(),
+            #[cfg(feature = "lingosoul")]
             Some(BuiltinPage::LingoSoul) => self.handle_lingosoul_click(input),
             Some(BuiltinPage::About) => self.handle_about_click(input),
             None => self.handle_plugin_settings_click(input),
@@ -318,6 +319,7 @@ impl SettingsApp {
     }
 
     /// Starts editing a text field; `on_commit` receives the text on Enter or when focus leaves.
+    #[cfg(feature = "lingosoul")]
     pub(crate) fn begin_text_input(
         &mut self,
         rect: Rect,

@@ -1,0 +1,3 @@
+uniform float4 shape0;
+const float4 lingosoul = float4(0.0);
+const float4 lingosoulWave = float4(0.0);

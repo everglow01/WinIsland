@@ -209,7 +209,7 @@ impl ChatPanel {
 
     /// Hit-tests a point in physical pixels relative to the panel's top-left corner.
     pub(crate) fn hit(&self, x: f32, y: f32, width: f32, height: f32, scale: f32) -> ChatHit {
-        let layout = layout(width / scale, height / scale, self.voice);
+        let layout = layout(width / scale, height / scale, self.voice || self.thinking);
         let point = Point::new(x / scale, y / scale);
         if layout.close.contains(point) {
             ChatHit::Close
@@ -226,7 +226,7 @@ impl ChatPanel {
 
     /// The text field in physical pixels relative to the panel, for placing the IME window.
     pub(crate) fn input_rect(&self, width: f32, height: f32, scale: f32) -> Rect {
-        let input = layout(width / scale, height / scale, self.voice).input;
+        let input = layout(width / scale, height / scale, self.voice || self.thinking).input;
         Rect::from_xywh(
             input.left * scale,
             input.top * scale,
@@ -286,7 +286,7 @@ impl ChatPanel {
     /// Lays the panel out for its full open size in physical pixels.
     pub(crate) fn prepare(&mut self, width: f32, height: f32, scale: f32) {
         self.size = (width / scale, height / scale);
-        let layout = layout(self.size.0, self.size.1, self.voice);
+        let layout = layout(self.size.0, self.size.1, self.voice || self.thinking);
         self.measure(layout.content_w);
         self.area_height = layout.area_bottom - layout.area_top;
         self.clamp_scroll(layout.content_w);
@@ -306,7 +306,7 @@ impl ChatPanel {
         if alpha <= 0.001 {
             return;
         }
-        let layout = layout(self.size.0, self.size.1, self.voice);
+        let layout = layout(self.size.0, self.size.1, self.voice || self.thinking);
         let fade = |color: Rgba| color.with_alpha_f(f32::from(color.a()) / 255.0 * alpha);
         let base = painter.save();
         painter.clip_rect(rect);
@@ -548,7 +548,7 @@ impl ChatPanel {
         } else {
             painter.fill_circle(center, radius, fade(BUTTON, 1.0));
         }
-        let icon = if self.listening {
+        let icon = if self.listening || self.thinking {
             &STOP_ICON
         } else {
             &MIC_ICON

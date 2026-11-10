@@ -27,92 +27,68 @@ Read in this order. Stop when you have what you need; do not read all of it for 
 | [.agents/skills/commit-push/SKILL.md](.agents/skills/commit-push/SKILL.md) | The user asked you to commit |
 | [.agents/skills/pr-write/SKILL.md](.agents/skills/pr-write/SKILL.md) | You are writing a PR description |
 
-## Hard rules
+## Writing code here
 
-These are absolute. Nothing else in this file overrides them.
+The island sits in the user's shell for hours at a time, next to whatever they are doing. A panic is a visible crash, a wrong pixel is a bug report, and a dropped frame is noticed.
 
-1. **Never commit, tag, push, or open a PR** unless the user explicitly asks for it in this turn.
-2. **Never modify changelog files** (`Changelog.md`, `Changelog-zh.md`). Only maintainers update them.
-3. **Never add tests** — no unit, integration, snapshot, UI, or `#[cfg(test)]` tests. The project rejects them.
-4. **Never create README or documentation files** unless the user asks.
-5. **Never relax a rule to make a check pass.** Do not edit this guide, `.agents/**`, `.github/workflows/**`, or `CODEOWNERS` unless the task is explicitly about those files; do not change CI configuration, path filters, skip markers, or test selection to get green. Fix the code, or report that you cannot.
-6. **Never silence a diagnostic.** No `#[allow(...)]`, no suppression pragma, and no catch-all arm that exists because handling the case was harder. `let _ =` on a fire-and-forget call is the project convention and is fine; discarding a result that can fail is not. Do not truncate with `as`: use `TryFrom` or a bounds check when the value may not fit. A warning is a signal to restructure; if suppression is genuinely required, explain it in the PR.
-7. **Never add `unwrap()`, `expect()`, or `panic!()`** outside `main` startup paths.
-8. **Never add `unsafe`** outside the crates listed in [.agents/ARCHITECTURE.md](.agents/ARCHITECTURE.md). If it is genuinely required there, put a `// SAFETY:` comment immediately above naming the invariant and who upholds it, and list it separately in your reply.
-9. **Do not change capture exclusion casually.** `crates/winisland-platform-windows/src/capture.rs` sets `WDA_EXCLUDEFROMCAPTURE` so the island does not appear in its own backdrop; the magnifier fallback and the liquid glass style depend on that ordering. Read the module before touching it.
-10. **Never commit, log, or paste secrets**, keys, tokens, or credentials.
-11. **Pull requests follow the template** in [`.github/pull_request_template.md`](.github/pull_request_template.md). An unfilled template gets the PR closed.
-12. **Do not write facts that expire** — versions, line numbers, file counts, dates — into tracked documentation. Point at the source instead.
+- **Match the file you are editing.** Imports, error style, naming, and layout come from its neighbours, not from preference. When the code and a document disagree, the code is right; say which document is stale.
+- **Respect the seams.** Win32, COM, D3D12, and winit live in the platform and render crates; `src/` orchestrates and draws through `Painter`. Decide where code goes with [.agents/ARCHITECTURE.md](.agents/ARCHITECTURE.md) before writing it.
+- **Do not panic on data you did not create.** No new `unwrap()`, `expect()`, or `panic!()` outside `main` startup. Media metadata, filenames, plugin payloads, and config files all arrive from outside, and all of them can be malformed.
+- **Do not discard a result that can fail.** `let _ =` is right for a fire-and-forget call with no consequence — the style guide's `PostMessageW` example — and wrong anywhere the caller could act on the failure.
+- **Fix warnings, do not mute them.** `#[allow(...)]`, a catch-all arm that swallows a case, and a lossy `as` cast each trade the next reader's time for silence. If suppression is genuinely correct, say why in the PR.
+- **Delete what you replace.** No fallback path, dead flag, or unused config key kept "just in case". A change that only adds deserves a second look: it may be a parallel implementation rather than a replacement.
+- **No abstraction for one call site.** Three uses is the usual threshold; one use is a guess about the future.
+- **Comments explain why.** A comment that restates the line below it is noise. Invariants, workarounds, and ordering constraints are worth writing down. Do not write facts that expire — versions, counts, line numbers — into comments or documents; point at the source.
+- **Adding a dependency is an architecture decision.** Say what it replaces, what it costs at build and run time, and why the standard library is not enough. `Cargo.lock` is generated; never hand-edit it.
+- **Stay inside the task.** Reformatting, renaming, or reordering unrelated code buries the real change. A task that legitimately touches many files is fine — explain why each file is in the diff — but do not widen the change on your own.
 
-## Conventions
+## Where a new feature goes
 
-Match the code around you before writing new code. When a document and the code disagree, the code is right; name the stale document.
+**The core experience lives in `src/`.** The island composition, the expanded pages and pager, the music view, lyrics, the spectrum, the settings shell, and the window and event loop orchestration. These decide how the island looks, moves, and responds; changing one changes WinIsland.
 
-- **Naming, imports, errors, rendering**: [.agents/STYLE-GUIDE.md](.agents/STYLE-GUIDE.md).
-- **Which crate owns a concern, where `unsafe` is allowed**: [.agents/ARCHITECTURE.md](.agents/ARCHITECTURE.md).
-- **Comments**: explain why, not what. No comment that restates the code.
-- **Dependencies**: check `Cargo.toml` and neighbouring imports before adding a crate. Adding one is an architecture decision; see [Dependency changes](#dependency-changes-are-architectural-decisions).
-- **Files**: prefer editing an existing file over creating a new one.
-- **Emoji**: none, unless the user asks.
+**An extension is a built-in plugin.** Calendar, timer, widgets, and third-party plugins. They add a page, a widget, or a settings panel inside surfaces that already exist. The rule of thumb: if it changes how the island itself looks or behaves, it is core; if it adds something inside it, it is an extension.
 
-## Before you edit
+When it is an extension:
 
-- Read the file you are changing and at least one neighbour. Match them, not your habits.
-- State the files and crates you intend to touch, and why, before editing. A change that needs more than 5 files or 2 crates: stop and ask.
-- If the request is ambiguous, ask one question rather than guessing and building the wrong thing.
+1. Add a module under `crates/winisland-builtin-plugins/src/`. Built-in plugins share this crate and depend only on `winisland-plugin-api`.
+2. Implement the ABI v2 entry point and expose `descriptor()`.
+3. Register it in `builtin_plugins()` in `crates/winisland-builtin-plugins/src/lib.rs` and add its translation keys.
+4. Draw, take input, and persist through the plugin services. Do not reach into `src/`.
 
-## While you edit
+`crates/winisland-builtin-plugins/src/calendar/` is the reference: the shared crate uses `default-features = false` plus the `sdk` feature, and each plugin exposes `descriptor()` and has an entry in `builtin_plugins()`. See [.agents/ARCHITECTURE.md](.agents/ARCHITECTURE.md#plugin-system) and [Page/plugin-dev.md](Page/plugin-dev.md).
 
-These rules exist because over-broad, unreviewed agent changes are the main source of structural debt in this repository. They apply to every task unless the user explicitly overrides a specific rule.
+If an extension cannot be expressed through the plugin ABI, name the missing host capability and propose adding it to the ABI. Do not route around the seam by writing it into `src/`.
 
-### Scope budget
+## Non-negotiables
 
-- Keep one task within 5 files and 2 crates. If a change must cross that boundary, or spread across unrelated modules, stop and report why each boundary is required. Do not expand scope on your own.
-- Change what the task needs. No drive-by reformatting, renaming, import sorting, comment rewriting, or opportunistic refactors.
-- Delete what you replace. No fallback path, compatibility shim, dead flag, or unused config key kept "just in case".
-- No new abstraction before a third call site. No function, type, module, config key, or feature flag without a call site.
-- Before reporting completion, state what the change removed. If the answer is "nothing", re-examine the change.
-
-### Dependency changes are architectural decisions
-
-- Do not add, remove, upgrade, or enable features on any dependency in `Cargo.toml` unless the user explicitly asks.
-- If a dependency change is required, state what it replaces, its build and runtime cost, whether it reaches `winisland-plugin-api` (plugin authors compile against that crate), and why the standard library or an existing dependency is not enough.
-- Do not edit `Cargo.lock` by hand; let cargo regenerate it.
-
-### No throwaway scaffolding
-
-- Do not create temporary test directories, comparison harnesses, verification crates, or `#[cfg(test)]` modules. The no-tests rule also forbids the temporary equivalents.
-- Do not leave `examples/`, debug binaries, or scratch files behind. If a file exists only to prove your change works, delete it before reporting.
+1. Do not commit, tag, push, or open a PR unless asked in this turn.
+2. Do not make a check pass by weakening it. No edits to this guide, `.agents/**`, `.github/workflows/**`, or `CODEOWNERS`, and no changes to CI configuration, path filters, skip markers, or test selection.
+3. Do not claim a change works without running it, and never invent output. "Should be fine" is not verification.
+4. No tests. The project accepts no unit, integration, snapshot, or UI tests, and no temporary scaffolding standing in for them.
+5. Do not create README or documentation files unless asked.
+6. No secrets in the tree, the logs, or the PR body.
+7. `Changelog.md` and `Changelog-zh.md` belong to the maintainers; do not edit them.
 
 ## Before you report
 
-### Verify
+- Run `cargo fmt --all` and `cargo clippy --workspace -- -D warnings`, and quote the real result, including the exit code.
+- Say what you could not verify. Unverified is not done.
+- List the files you actually changed.
+- For UI work, describe how a person can see the effect; there are no UI tests to fall back on.
+- If the request conflicts with something here, name the conflict and ask, rather than picking a side.
 
-- Run `cargo fmt --all` and `cargo clippy --workspace -- -D warnings` after any code change, and report the real result, including failures and the exit code.
-- Never claim a change compiles, passes, or works without running it. "Should be fine" is not verification.
-- Never invent command output. Quote the terminal, not what you expected the terminal to print.
-- Unverified is not done. If part of the change cannot be checked, name that part.
-- For UI changes, describe how a person can observe the effect, because this project has no automated tests.
+## Commits and pull requests
 
-### Report
-
-- List the files you actually changed, using real paths.
-- State partial work as partial. Never present an unfinished task as complete.
-- When a request conflicts with these rules, name the conflict and ask. Do not silently choose one side.
-
-### Commits
-
-A commit message describes what the commit changes and why. Nothing else.
-
-- Format, types, scopes, and body rules live in [.agents/skills/commit-push/SKILL.md](.agents/skills/commit-push/SKILL.md). Load that skill rather than reconstructing the format from memory.
-- Subject: imperative, lowercase, no trailing period, 72 characters or fewer.
-- No workflow position or task tracking: no `phase 1`, `P0`, `step 3`, `stage 2`, `batch 4`, `part 2`, or any localized equivalent.
-- No `[ci-skip]`, `[docs]`, or equivalent marker in a commit message or PR title.
-- Never `git add -A` when the tree spans unrelated changes; stage related files together.
+- Commit only when asked. A commit message describes what changed and why; format, types, and scopes live in [.agents/skills/commit-push/SKILL.md](.agents/skills/commit-push/SKILL.md).
+- No workflow bookkeeping in the message: no `phase 1`, `P0`, `step 3`, `batch 4`, or `[ci-skip]` markers.
+- Stage related files together; do not `git add -A` across unrelated changes.
+- Pull requests follow [.github/pull_request_template.md](.github/pull_request_template.md).
 
 ## Project-specific
 
-- **Verify with**: `cargo fmt --all`, then `cargo clippy --workspace -- -D warnings`. `cargo build --release` only when asked. CI parity and failure modes: [.agents/skills/pr-check/SKILL.md](.agents/skills/pr-check/SKILL.md).
-- **Ownership boundaries**: `winisland-core` holds the domain layer and never depends on a platform crate; `winisland-platform` holds OS-neutral contracts with no `unsafe`; `winisland-platform-windows` owns the Win32 surface; `winisland-render` owns the GPU; `src/` is the application and depends on `winisland-core`, never the reverse. The full table is in [.agents/ARCHITECTURE.md](.agents/ARCHITECTURE.md).
-- **Do not touch**: `Changelog.md`, `Changelog-zh.md`, `Cargo.lock` (by hand), and CI or agent configuration unless the task is explicitly about them.
-- **Conventions live in**: [.agents/STYLE-GUIDE.md](.agents/STYLE-GUIDE.md). The code around you wins over any document.
+- **Platform order**: `winisland-core` is the domain layer and never depends on a platform crate; `winisland-platform` holds OS-neutral contracts with no `unsafe`; `winisland-platform-windows` owns the Win32 surface; `winisland-render` owns the GPU; `src/` depends on `winisland-core`, never the reverse. Full table: [.agents/ARCHITECTURE.md](.agents/ARCHITECTURE.md).
+- **`unsafe`**: only in the crates [.agents/ARCHITECTURE.md](.agents/ARCHITECTURE.md) lists, always with a `// SAFETY:` comment naming the invariant and who upholds it.
+- **Capture exclusion**: `crates/winisland-platform-windows/src/capture.rs` sets `WDA_EXCLUDEFROMCAPTURE` so the island does not appear in its own backdrop. The magnifier fallback and the liquid glass style depend on that ordering; read the module before touching it.
+- **Do not touch**: `Cargo.lock` by hand, and CI or agent configuration unless the task is about it.
+- **Conventions**: [.agents/STYLE-GUIDE.md](.agents/STYLE-GUIDE.md). The code around you wins over it.
+- **Emoji**: none, unless asked.

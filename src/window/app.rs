@@ -1,4 +1,5 @@
 use crate::core::audio::AudioProcessor;
+use crate::core::memory::MemoryReclaimer;
 use crate::core::persistence::{get_config_path, load_config};
 use crate::core::smtc::{MediaInfo, SmtcListener};
 use crate::platform::WindowRef;
@@ -6,7 +7,6 @@ use crate::plugin::inventory::PluginManager;
 use crate::ui::compact::CompactOverlay;
 use crate::ui::expanded::pager::ExpandedPage;
 use crate::window::settings::SettingsApp;
-use pollkit::{Cooldown, Every, Job};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -24,6 +24,7 @@ use winisland_plugin_host::host::PluginHost;
 use winisland_plugin_package::manifest::PluginManifest;
 use winisland_plugin_package::marketplace::MarketplaceCatalog;
 use winisland_render::Renderer;
+use winisland_utils::poll::{Cooldown, Every, Job};
 
 mod activities;
 mod events;
@@ -63,7 +64,7 @@ enum DragAxis {
 #[derive(Clone, Copy, PartialEq)]
 enum BackdropCaptureState {
     Stopped,
-    Running { visible: bool },
+    Running,
     Failed(Instant),
 }
 
@@ -78,7 +79,6 @@ pub struct App {
     window: Option<WindowRef>,
     host_backdrop: bool,
     backdrop_capture: BackdropCaptureState,
-    recorder: Option<crate::utils::recorder::Recorder>,
     renderer: Option<Renderer>,
     settings: Option<SettingsApp>,
     guide: Option<crate::window::guide::GuideApp>,
@@ -90,7 +90,6 @@ pub struct App {
     expanded: bool,
     multitask: Multitask<crate::ui::island::multitask::activities::Activity>,
     status_indicators: crate::ui::island::multitask::activities::StatusIndicators,
-    timer_orb: bool,
     orb_collapse_from: Option<f32>,
     device_feed: Option<Box<dyn DeviceActivityFeed>>,
     device_monitor_retry: Cooldown,
@@ -133,7 +132,7 @@ pub struct App {
     monitor_check: Every,
     display_settle_until: Option<Instant>,
     display_transition: bool,
-    working_set_trim: Every,
+    memory: MemoryReclaimer,
     compact_widget_refresh: Cooldown,
     last_config_modified: Option<SystemTime>,
     next_frame_deadline: Instant,
@@ -155,7 +154,7 @@ pub struct App {
     touch_pos: WindowPoint,
     last_touch_at: Option<Instant>,
     activity_mgr: ActivityManager,
-    timer_content: Option<crate::ui::compact::timer::TimerContent>,
+    secondary_indicator: Option<activities::SecondaryIndicator>,
     widget_mgr: WidgetManager,
     plugin_mgr: PluginManager,
     plugin_host: Option<Rc<PluginHost>>,
@@ -163,10 +162,12 @@ pub struct App {
     v2_widget_ids: HashSet<u64>,
     v2_activity_ids: HashSet<u64>,
     v2_activity_revision: u64,
+    v2_secondary: Vec<winisland_core::context::Activity>,
     v2_media_revision: u64,
     v2_album_art_hash: Cell<Option<u64>>,
     v2_settings_revision: u64,
     plugin_media_source: Option<PluginMediaSource>,
+    plugin_alert_revision: u64,
     is_light_theme: bool,
     pending_install: Job<InstallResult>,
     marketplace_catalog: Option<MarketplaceCatalog>,
@@ -227,7 +228,6 @@ impl Default for App {
             window: None,
             host_backdrop: false,
             backdrop_capture: BackdropCaptureState::Stopped,
-            recorder: None,
             renderer: None,
             settings: None,
             guide: None,
@@ -236,7 +236,6 @@ impl Default for App {
             expanded: false,
             multitask: Multitask::new(),
             status_indicators: Default::default(),
-            timer_orb: false,
             orb_collapse_from: None,
             device_feed: None,
             device_monitor_retry: Cooldown::ready(),
@@ -286,7 +285,7 @@ impl Default for App {
             monitor_check: Every::secs(1),
             display_settle_until: None,
             display_transition: false,
-            working_set_trim: Every::new(frame::WORKING_SET_TRIM_INTERVAL),
+            memory: MemoryReclaimer::default(),
             compact_widget_refresh: Cooldown::ready(),
             last_config_modified,
             next_frame_deadline: Instant::now(),
@@ -308,7 +307,7 @@ impl Default for App {
             touch_pos: WindowPoint::new(0.0, 0.0),
             last_touch_at: None,
             activity_mgr: ActivityManager::default(),
-            timer_content: None,
+            secondary_indicator: None,
             widget_mgr: WidgetManager::new(),
             plugin_mgr,
             plugin_host,
@@ -316,10 +315,12 @@ impl Default for App {
             v2_widget_ids: HashSet::new(),
             v2_activity_ids: HashSet::new(),
             v2_activity_revision: u64::MAX,
+            v2_secondary: Vec::new(),
             v2_media_revision: 0,
             v2_album_art_hash: Cell::new(None),
             v2_settings_revision: 0,
             plugin_media_source: None,
+            plugin_alert_revision: 0,
             is_light_theme: false,
             pending_install: Job::idle(),
             marketplace_catalog: None,
@@ -438,8 +439,10 @@ impl SeekDrag {
 
 struct LyricState {
     current_text: String,
+    current_font_family: Option<String>,
     current_secondary_text: String,
     old_text: String,
+    old_font_family: Option<String>,
     old_secondary_text: String,
     highlight: Option<LyricHighlight>,
     transition: f32,
@@ -459,8 +462,10 @@ impl Default for LyricState {
                 .max(1);
         Self {
             current_text: String::new(),
+            current_font_family: None,
             current_secondary_text: String::new(),
             old_text: String::new(),
+            old_font_family: None,
             old_secondary_text: String::new(),
             highlight: None,
             transition: 1.0,
@@ -477,11 +482,13 @@ impl LyricState {
         &mut self,
         text: String,
         secondary_text: String,
+        font_family: Option<String>,
         highlight: Option<LyricHighlight>,
         show_immediately: bool,
         transition_mode: LyricTransitionMode,
     ) {
         self.old_text = std::mem::replace(&mut self.current_text, text);
+        self.old_font_family = std::mem::replace(&mut self.current_font_family, font_family);
         self.old_secondary_text =
             std::mem::replace(&mut self.current_secondary_text, secondary_text);
         self.highlight = highlight;

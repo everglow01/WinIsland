@@ -23,20 +23,20 @@ pub const PAGER_EXTENT: f32 = GAP + CLOSE_SIZE + SHADOW_SIGMA * 3.0;
 pub enum ExpandedPage {
     Music,
     Widgets,
-    Timer,
     Plugin(u64),
 }
 
 pub struct PageAvailability {
     pub music: bool,
     pub calendar: Option<u64>,
+    pub timer: Option<u64>,
 }
 
 impl ExpandedPage {
     pub fn is_available(self, availability: &PageAvailability) -> bool {
         match self {
             Self::Music => availability.music,
-            Self::Widgets | Self::Timer | Self::Plugin(_) => true,
+            Self::Widgets | Self::Plugin(_) => true,
         }
     }
 }
@@ -51,7 +51,7 @@ pub fn available_pages(
             ExpandedPageKind::Music => Some(ExpandedPage::Music),
             ExpandedPageKind::Widgets => Some(ExpandedPage::Widgets),
             ExpandedPageKind::Calendar => availability.calendar.map(ExpandedPage::Plugin),
-            ExpandedPageKind::Timer => Some(ExpandedPage::Timer),
+            ExpandedPageKind::Timer => availability.timer.map(ExpandedPage::Plugin),
         })
         .filter(|page| page.is_available(availability))
         .collect()

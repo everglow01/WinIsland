@@ -16,10 +16,11 @@ use crate::utils::color::SettingsTheme;
 use crate::utils::color::settings_color;
 
 use super::super::items::{
-    CONTENT_PADDING, GROUP_INNER_PAD, GROUP_RADIUS, POPUP_BTN_H, POPUP_BTN_R, POPUP_BTN_W,
-    ROW_HEIGHT, SettingsItem, TEXT_FIELD_W, TOGGLE_H, TOGGLE_W, picker_button_rects, stepper_rects,
-    trailing_control_rect,
+    CONTENT_PADDING, GROUP_INNER_PAD, GROUP_RADIUS, POPUP_BTN_H, POPUP_BTN_W, ROW_HEIGHT,
+    SettingsItem, TOGGLE_H, TOGGLE_W, picker_button_rects, stepper_rects, trailing_control_rect,
 };
+#[cfg(feature = "lingosoul")]
+use super::super::items::{POPUP_BTN_R, TEXT_FIELD_W};
 use super::controls::{
     PillBtnParams, SettingsPainter, StepperParams, draw_pill_btn, draw_row_separator, draw_stepper,
     draw_switch, draw_updown_indicator, ellipsize_text, text_baseline,
@@ -319,6 +320,7 @@ fn draw_row_button(
 }
 
 /// What a stored secret shows when not being edited: its last four characters.
+#[cfg(feature = "lingosoul")]
 fn masked(value: &str) -> String {
     let tail: String = value
         .chars()
@@ -331,6 +333,7 @@ fn masked(value: &str) -> String {
     format!("••••••{tail}")
 }
 
+#[cfg(feature = "lingosoul")]
 struct TextFieldRow<'a> {
     label: &'a str,
     value: &'a str,
@@ -339,6 +342,7 @@ struct TextFieldRow<'a> {
     enabled: bool,
 }
 
+#[cfg(feature = "lingosoul")]
 fn draw_row_text_field(
     ctx: &ItemCtx,
     y: f32,
@@ -735,6 +739,7 @@ pub fn draw_items(params: DrawItemsParams<'_>) {
             SettingsItem::RowLabel { label } => {
                 draw_row_label(&ctx, y, label, &mut groups);
             }
+            #[cfg(feature = "lingosoul")]
             SettingsItem::RowText {
                 label,
                 value,

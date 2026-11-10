@@ -15,11 +15,10 @@ const CONTINUOUS_CORNER_EXPONENT: f32 = 2.5;
 const CIRCULAR_APEX_INSET: f32 = 1.0 - FRAC_1_SQRT_2;
 const MAX_BEZEL_FRACTION: f32 = 0.7;
 const MAX_DISPERSION: f32 = 0.5;
-const EDGE_REACH: f32 = 1.0;
-const SHARP_RIM_REACH: f32 = 0.08;
 
 thread_local! {
-    static EFFECT: OnceCell<Option<RuntimeEffect>> = const { OnceCell::new() };
+    static EFFECTS: [OnceCell<Option<RuntimeEffect>>; 2] = const { [OnceCell::new(), OnceCell::new()] };
+    static WAVES: OnceCell<Option<RuntimeEffect>> = const { OnceCell::new() };
 }
 
 /// Blurred screen content beneath the current window, addressed in surface pixels.
@@ -59,10 +58,15 @@ pub struct LiquidMaterial {
     pub stroke_width: f32,
     pub stroke_opacity: f32,
     pub stroke_offset_y: f32,
+    pub border_width: f32,
+    pub border_opacity: f32,
+    pub border_gray: f32,
     pub shadow_offset: Vec2,
     pub shadow_radius: f32,
     pub shadow_spread: f32,
     pub shadow_alpha: f32,
+    /// 1 draws the shadow as a soft ring along the edge, 0 as a filled drop.
+    pub shadow_ring: f32,
     pub black_fade: f32,
     pub lingosoul: [f32; 4],
     pub lingosoul_wave: [f32; 4],
@@ -79,20 +83,25 @@ impl LiquidMaterial {
             morph_dispersion: 0.06,
             tint: Rgba::from_argb(95, 10, 11, 15),
             legibility: 0.32,
-            light: Vec2::new(-FRAC_1_SQRT_2, -FRAC_1_SQRT_2),
-            specular_strength: 0.75,
-            opposite_specular_strength: 0.38,
-            specular_sharpness: 3.0,
+            light: Vec2::new(0.0, -1.0),
+            specular_strength: 0.55,
+            opposite_specular_strength: 0.3,
+            specular_sharpness: 1.5,
             specular_falloff: 0.9,
-            specular_opacity: 0.8,
-            specular_width: 1.5 * scale,
+            specular_opacity: 0.6,
+            specular_width: 0.9 * scale,
             stroke_width: 0.65 * scale,
             stroke_opacity: 0.25,
             stroke_offset_y: 0.2 * scale,
-            shadow_offset: Vec2::new(0.0, 2.0 * scale),
-            shadow_radius: 7.0 * scale,
-            shadow_spread: -scale,
-            shadow_alpha: 0.22,
+            // Device pixels, not scaled: a hairline at every DPI.
+            border_width: 0.5,
+            border_opacity: 0.5,
+            border_gray: 0.0,
+            shadow_offset: Vec2::new(0.0, 7.0 * scale),
+            shadow_radius: 4.0 * scale,
+            shadow_spread: 0.0,
+            shadow_alpha: 0.05,
+            shadow_ring: 1.0,
             black_fade: 0.0,
             lingosoul: [0.0; 4],
             lingosoul_wave: [0.0; 4],
@@ -121,23 +130,40 @@ impl LiquidMaterial {
         Self {
             bezel_width: 7.0 * scale,
             thickness: 6.0 * scale,
-            specular_width: 1.0 * scale,
+            specular_width: 0.7 * scale,
             stroke_width: 0.5 * scale,
             shadow_radius: 4.0 * scale,
             shadow_offset: Vec2::new(0.0, 1.0 * scale),
+            shadow_spread: -scale,
+            shadow_alpha: 0.22,
+            shadow_ring: 0.0,
             ..Self::island(scale)
         }
     }
 }
 
-fn effect() -> Option<RuntimeEffect> {
-    EFFECT.with(|cell| {
-        cell.get_or_init(|| {
-            RuntimeEffect::make_for_shader(include_str!("liquid.sksl"), None)
-                .map_err(|error| log::error!("Liquid glass shader compilation failed: {error}"))
-                .ok()
-        })
-        .clone()
+fn effect(lingosoul: bool) -> Option<RuntimeEffect> {
+    EFFECTS.with(|effects| {
+        effects[usize::from(lingosoul)]
+            .get_or_init(|| {
+                let source = if lingosoul {
+                    concat!(
+                        include_str!("shaders/lingosoul-uniforms.sksl"),
+                        include_str!("shaders/lingosoul-waves.sksl"),
+                        include_str!("shaders/liquid.sksl")
+                    )
+                } else {
+                    concat!(
+                        include_str!("shaders/liquid-island.sksl"),
+                        include_str!("shaders/lingosoul-waves.sksl"),
+                        include_str!("shaders/liquid.sksl")
+                    )
+                };
+                RuntimeEffect::make_for_shader(source, None)
+                    .map_err(|error| log::error!("Liquid glass shader compilation failed: {error}"))
+                    .ok()
+            })
+            .clone()
     })
 }
 
@@ -186,6 +212,55 @@ impl Uniforms<'_> {
 }
 
 impl<'a> Painter<'a> {
+    pub fn draw_lingosoul_waves(
+        &self,
+        rect: Rect,
+        material: &LiquidMaterial,
+        opacity: f32,
+    ) -> bool {
+        let opacity = opacity.clamp(0.0, 1.0);
+        if opacity <= 0.0
+            || material.lingosoul[0] <= 0.0
+            || rect.width() <= 0.0
+            || rect.height() <= 0.0
+        {
+            return true;
+        }
+        let effect = WAVES.with(|cell| {
+            cell.get_or_init(|| {
+                RuntimeEffect::make_for_shader(
+                    concat!(
+                        include_str!("shaders/lingosoul-uniforms.sksl"),
+                        include_str!("shaders/lingosoul-waves.sksl"),
+                        include_str!("shaders/lingosoul.sksl"),
+                    ),
+                    None,
+                )
+                .map_err(|error| log::error!("LingoSoul wave shader compilation failed: {error}"))
+                .ok()
+            })
+            .clone()
+        });
+        let Some(effect) = effect else {
+            return false;
+        };
+        let mut uniforms = Uniforms {
+            effect: &effect,
+            bytes: vec![0; effect.uniform_size()],
+        };
+        uniforms.set("shape0", &shape_uniform(rect));
+        uniforms.set("lingosoul", &material.lingosoul);
+        uniforms.set("lingosoulWave", &material.lingosoul_wave);
+        uniforms.set("opacity", &[opacity]);
+        let Some(shader) = effect.make_shader(Data::new_copy(&uniforms.bytes), &[], None) else {
+            return false;
+        };
+        let mut paint = Paint::default();
+        paint.set_shader(shader);
+        self.canvas().draw_rect(to_skia_rect(rect), &paint);
+        true
+    }
+
     /// Draws refractive glass with its edge stroke and shadow over `backdrop`; `progress` runs the
     /// 0..1 material morph.
     /// Returns false if the shader is unavailable.
@@ -206,7 +281,7 @@ impl<'a> Painter<'a> {
         {
             return true;
         }
-        let Some(effect) = effect() else {
+        let Some(effect) = effect(material.lingosoul[3] > 0.0) else {
             return false;
         };
         let secondary = shape
@@ -286,6 +361,14 @@ impl<'a> Painter<'a> {
             ],
         );
         uniforms.set(
+            "border",
+            &[
+                material.border_width,
+                material.border_opacity.clamp(0.0, 1.0),
+                material.border_gray.clamp(0.0, 1.0),
+            ],
+        );
+        uniforms.set(
             "shadow",
             &[
                 material.shadow_offset.x,
@@ -295,16 +378,11 @@ impl<'a> Painter<'a> {
             ],
         );
         uniforms.set("shadowAlpha", &[material.shadow_alpha]);
+        uniforms.set("shadowRing", &[material.shadow_ring.clamp(0.0, 1.0)]);
         uniforms.set("opacity", &[opacity]);
         uniforms.set("blackFade", &[material.black_fade.clamp(0.0, 1.0)]);
         uniforms.set("lingosoul", &material.lingosoul);
         uniforms.set("lingosoulWave", &material.lingosoul_wave);
-        let rim_reach = if backdrop.blur_scale > 1.0 {
-            EDGE_REACH
-        } else {
-            (bezel * SHARP_RIM_REACH * material.displacement_factor).clamp(EDGE_REACH, bezel)
-        };
-        uniforms.set("rimReach", &[rim_reach]);
 
         let sampling = SamplingOptions::new(FilterMode::Linear, MipmapMode::None);
         let Some(blurred) = backdrop.blurred.to_shader(
@@ -328,7 +406,8 @@ impl<'a> Painter<'a> {
                 shape.rect.bottom.max(ball.bottom),
             )
         });
-        let margin = (material.shadow_radius + material.shadow_spread.max(0.0))
+        // The ring shadow is Gaussian; 2.5 radii leaves under 1 % of its peak outside the bounds.
+        let margin = (material.shadow_radius * 2.5 + material.shadow_spread.max(0.0))
             .max(material.stroke_width + material.stroke_offset_y)
             + material
                 .shadow_offset

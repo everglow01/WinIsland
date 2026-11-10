@@ -1,6 +1,8 @@
+#[cfg(feature = "lingosoul")]
+use super::items::TEXT_FIELD_W;
 use super::items::{
-    CONTENT_PADDING, GROUP_INNER_PAD, POPUP_BTN_H, POPUP_BTN_W, ROW_HEIGHT, SettingsItem,
-    TEXT_FIELD_W, TOGGLE_H, TOGGLE_W, picker_button_rects, stepper_rects, trailing_control_rect,
+    CONTENT_PADDING, GROUP_INNER_PAD, POPUP_BTN_H, POPUP_BTN_W, ROW_HEIGHT, SettingsItem, TOGGLE_H,
+    TOGGLE_W, picker_button_rects, stepper_rects, trailing_control_rect,
 };
 use crate::ui::widget::compact::widget_width;
 use crate::ui::widget::expanded::{WidgetGridLayout, widget_corner_radius, widget_grid_layout};
@@ -42,6 +44,7 @@ pub enum ClickResult {
     AppItem(usize),
     FolderSelect(usize),
     FolderClear(usize),
+    #[cfg(feature = "lingosoul")]
     TextField(usize),
 }
 
@@ -91,8 +94,9 @@ impl ClickResult {
             | ClickResult::RowButton(index)
             | ClickResult::AppItem(index)
             | ClickResult::FolderSelect(index)
-            | ClickResult::FolderClear(index)
-            | ClickResult::TextField(index) => Some(*index),
+            | ClickResult::FolderClear(index) => Some(*index),
+            #[cfg(feature = "lingosoul")]
+            ClickResult::TextField(index) => Some(*index),
         }
     }
 
@@ -651,6 +655,7 @@ pub fn hit_test(items: &[SettingsItem], mx: f32, my: f32, start_y: f32, width: f
             {
                 return ClickResult::AppItem(idx);
             }
+            #[cfg(feature = "lingosoul")]
             SettingsItem::RowText { enabled, .. } if *enabled => {
                 if trailing_control_rect(y, ROW_HEIGHT, content_w, TEXT_FIELD_W, POPUP_BTN_H)
                     .contains(point)

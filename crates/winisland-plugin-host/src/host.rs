@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use winisland_core::widgets::PluginWidget;
 use winisland_plugin_api::abi::{ABI_VERSION_2, PluginDescriptorV2, PluginStatus};
-use winisland_plugin_api::types::v2::WidgetId;
+use winisland_plugin_api::types::v2::{PluginToken, WidgetId};
 use winisland_plugin_package::activate::read_manifest_file;
 use winisland_plugin_package::manifest::PluginManifest;
 
@@ -29,6 +29,14 @@ pub struct PluginPage {
     pub plugin_id: String,
     pub key: String,
     pub title: String,
+}
+
+/// A compact alert card the host is showing on a plugin's behalf.
+pub struct PluginAlert {
+    pub token: PluginToken,
+    pub title: String,
+    pub body: String,
+    pub icon: String,
 }
 
 pub struct PluginHost {
@@ -80,7 +88,39 @@ impl PluginHost {
             .resources
             .owner(ResourceKind::Widget, id)
             .ok()?;
-        Some(self.runtime.registry.get(token).ok()?.id.clone())
+        Some(self.runtime.registry.get(token).ok()?.id)
+    }
+
+    /// The alert the host is showing, tagged with the revision that produced it.
+    pub fn alert_snapshot(&self) -> (u64, Option<PluginAlert>) {
+        let Ok(state) = self.runtime.state.lock() else {
+            return (0, None);
+        };
+        let revision = state.alert_revision;
+        let alert = state
+            .alert
+            .as_ref()
+            .filter(|alert| !alert.dismissed)
+            .map(|alert| PluginAlert {
+                token: alert.token,
+                title: alert.title.clone(),
+                body: alert.body.clone(),
+                icon: alert.icon.clone(),
+            });
+        (revision, alert)
+    }
+
+    /// Removes the alert the user closed; returns whether anything changed.
+    pub fn dismiss_alert(&self) -> bool {
+        let Ok(mut state) = self.runtime.state.lock() else {
+            return false;
+        };
+        if !state.alert.as_ref().is_some_and(|alert| !alert.dismissed) {
+            return false;
+        }
+        state.alert = None;
+        state.alert_revision = state.alert_revision.wrapping_add(1);
+        true
     }
 
     /// Enabled expanded pages with their owning plugin, in surface order.
@@ -210,6 +250,7 @@ impl PluginHost {
     pub fn prepare_widget_frame(
         &self,
         widget_id: u64,
+        previous: Option<&PreparedFrame>,
     ) -> Result<Option<PreparedFrame>, WidgetFrameError> {
         let token = self
             .runtime
@@ -221,7 +262,7 @@ impl PluginHost {
                 disabled: false,
             })?;
         let widget = unsafe { winisland_plugin_api::types::v2::WidgetId::from_raw(widget_id) };
-        self.runtime.prepare_widget_frame(token, widget)
+        self.runtime.prepare_widget_frame(token, widget, previous)
     }
 
     pub fn set_widget_logical_size(
@@ -628,12 +669,13 @@ impl PluginHost {
     }
 
     pub fn shutdown_all(&self) -> Vec<String> {
-        let ids = self
-            .entries
-            .borrow()
-            .iter()
-            .map(|entry| entry.library().metadata().id.clone())
-            .collect::<Vec<_>>();
+        let ids = {
+            let entries = self.entries.borrow();
+            entries
+                .iter()
+                .map(|entry| entry.library().metadata().id.clone())
+                .collect::<Vec<_>>()
+        };
         ids.into_iter()
             .filter_map(|id| {
                 self.unload_if_loaded(&id)

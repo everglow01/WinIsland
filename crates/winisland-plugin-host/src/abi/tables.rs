@@ -1,8 +1,8 @@
 use crate::services::extensions;
 use std::ffi::c_void;
 use winisland_plugin_api::{
-    ActivityApiV2, AssistantApiV2, CommandApiV2, EventsApiV2, InputApiV2, MediaSessionApiV2,
-    SurfaceApiV2,
+    ActivityApiV2, AssistantApiV2, CommandApiV2, EventsApiV2, IndicatorApiV2, InputApiV2,
+    MediaSessionApiV2, NotificationApiV2, SurfaceApiV2,
 };
 
 use winisland_plugin_api::abi::{
@@ -13,8 +13,8 @@ use winisland_plugin_api::abi::{
 
 use crate::runtime::HostRuntime;
 use crate::services::{
-    activity, context, host_state, i18n, image, log, lyrics, media, settings, store, system, text,
-    widget,
+    activity, context, host_state, i18n, image, indicator, log, lyrics, media, notification,
+    settings, store, system, text, widget,
 };
 
 pub(crate) struct AbiTables {
@@ -38,6 +38,8 @@ pub(crate) struct AbiTables {
     events: EventsApiV2,
     media_session: MediaSessionApiV2,
     system: SystemApiV2,
+    notification: NotificationApiV2,
+    indicator: IndicatorApiV2,
 }
 
 fn prefix<T>(version: u32) -> TablePrefix {
@@ -62,6 +64,18 @@ impl AbiTables {
                 local_datetime: Some(system::local_datetime),
                 lunar_date: Some(system::lunar_date),
                 current_language: Some(system::current_language),
+            },
+            notification: NotificationApiV2 {
+                prefix: prefix::<NotificationApiV2>(abi::IFACE_VERSION_1),
+                toast: Some(notification::toast),
+                alert: Some(notification::alert),
+                dismiss_alert: Some(notification::dismiss_alert),
+                alert_state: Some(notification::alert_state),
+            },
+            indicator: IndicatorApiV2 {
+                prefix: prefix::<IndicatorApiV2>(abi::IFACE_VERSION_1),
+                set: Some(indicator::set),
+                clear: Some(indicator::clear),
             },
             input: InputApiV2 {
                 prefix: prefix::<InputApiV2>(abi::IFACE_VERSION_1),
@@ -187,6 +201,8 @@ impl AbiTables {
         self.surface.prefix.context = context;
         self.events.prefix.context = context;
         self.media_session.prefix.context = context;
+        self.notification.prefix.context = context;
+        self.indicator.prefix.context = context;
         self.host.prefix.context = context;
         self.context.prefix.context = context;
         self.media.prefix.context = context;
@@ -222,6 +238,8 @@ unsafe extern "C" fn query(
         abi::IFACE_SURFACE => (&tables.surface as *const SurfaceApiV2).cast(),
         abi::IFACE_EVENTS => (&tables.events as *const EventsApiV2).cast(),
         abi::IFACE_MEDIA_SESSION => (&tables.media_session as *const MediaSessionApiV2).cast(),
+        abi::IFACE_NOTIFICATION => (&tables.notification as *const NotificationApiV2).cast(),
+        abi::IFACE_INDICATOR => (&tables.indicator as *const IndicatorApiV2).cast(),
         abi::IFACE_CONTEXT => (&tables.context as *const ContextApiV2).cast(),
         abi::IFACE_MEDIA => (&tables.media as *const MediaApiV2).cast(),
         abi::IFACE_I18N => (&tables.i18n as *const I18nApiV2).cast(),

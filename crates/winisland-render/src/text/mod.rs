@@ -16,9 +16,10 @@ use crate::painter::Painter;
 use crate::types::{BlurSpec, FontStyle, FontWeight, Rgba};
 
 mod plugin;
+mod shaping;
 pub use plugin::{PluginTextMetrics, PluginTextParams, PluginTextRun};
 
-static GLOBAL_FONT_MANAGER: OnceLock<FontManager> = OnceLock::new();
+static GLOBAL_FONT_MANAGER: OnceLock<FontManager<'static>> = OnceLock::new();
 
 #[derive(Clone)]
 struct Face {
@@ -26,7 +27,37 @@ struct Face {
     synthetic: f32,
 }
 
-type TextGroup = (String, Face, f32);
+struct TextGroup {
+    text: String,
+    face: Face,
+    width: f32,
+    shaped: Option<shaping::ShapedRun>,
+}
+
+impl TextGroup {
+    fn new(text: String, face: Face, size: f32) -> Self {
+        let shaped = shaping::ShapedRun::new(&text, &face.typeface, size);
+        let width = shaped
+            .as_ref()
+            .map_or_else(|| measure_group(&text, &face, size), |run| run.width);
+        Self {
+            text,
+            face,
+            width,
+            shaped,
+        }
+    }
+
+    fn prefix_width(&self, end: usize, size: f32) -> f32 {
+        let Some(prefix) = self.text.get(..end) else {
+            return 0.0;
+        };
+        self.shaped.as_ref().map_or_else(
+            || measure_group(prefix, &self.face, size),
+            |run| run.prefix_width(end),
+        )
+    }
+}
 type TextGroups = Vec<TextGroup>;
 type TextCacheValue = (f32, TextGroups);
 type TextCacheMap = HashMap<u64, TextCacheValue>;
@@ -76,7 +107,9 @@ pub struct FontSelection<'a> {
     pub locale: &'a str,
 }
 
-pub struct FontManager;
+pub struct FontManager<'a> {
+    family: Option<&'a str>,
+}
 
 struct FontChoice {
     family: Option<String>,
@@ -97,7 +130,8 @@ thread_local! {
         user: None,
     }) };
     static FACE_CACHE: RefCell<HashMap<(u32, u16), Face>> = RefCell::new(HashMap::new());
-    static FALLBACK_CACHE: RefCell<HashMap<(char, u16), Face>> = RefCell::new(HashMap::new());
+    static FAMILY_CACHE: RefCell<HashMap<String, Option<Typeface>>> = RefCell::new(HashMap::new());
+    static FALLBACK_CACHE: RefCell<HashMap<(u32, char, u16), Face>> = RefCell::new(HashMap::new());
     static TEXT_CACHE: RefCell<TextCacheMap> = RefCell::new(HashMap::new());
     static TEXT_PATH_CACHE: RefCell<TextPathCacheMap> = RefCell::new(HashMap::new());
     static TEXT_PREFIX_CACHE: RefCell<TextPrefixCacheMap> = RefCell::new(HashMap::new());
@@ -112,6 +146,7 @@ const FALLBACK_FAMILIES: [&str; 4] = [
     "Segoe UI",
 ];
 const DEFAULT_FALLBACK_LOCALE: &str = "zh-CN";
+const FAMILY_CACHE_LIMIT: usize = 32;
 const FALLBACK_CACHE_LIMIT: usize = 2000;
 const TEXT_CACHE_LIMIT: usize = 500;
 const TEXT_PATH_CACHE_LIMIT: usize = 100;
@@ -160,9 +195,10 @@ fn break_tokens(text: &str) -> Vec<String> {
     tokens
 }
 
-fn hash_cache_key(text: &str, style: FontStyle, size: f32) -> u64 {
+fn hash_cache_key(text: &str, style: FontStyle, size: f32, family: Option<&str>) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     text.hash(&mut hasher);
+    family.hash(&mut hasher);
     style.cache_key().hash(&mut hasher);
     ((size * 100.0).round() as i32).hash(&mut hasher);
     hasher.finish()
@@ -212,8 +248,22 @@ fn is_font_file(typeface: &Typeface) -> bool {
     })
 }
 
-fn primary_typeface() -> Typeface {
-    user_typeface().unwrap_or_else(|| SYSTEM_TYPEFACE.with(Typeface::clone))
+fn primary_typeface(family: Option<&str>) -> Typeface {
+    let selected = family.and_then(|family| {
+        FAMILY_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            if let Some(typeface) = cache.get(family) {
+                return typeface.clone();
+            }
+            let typeface = load_user_typeface(Some(family), None);
+            evict_one_if_full(&mut cache, FAMILY_CACHE_LIMIT);
+            cache.insert(family.to_owned(), typeface.clone());
+            typeface
+        })
+    });
+    selected
+        .or_else(user_typeface)
+        .unwrap_or_else(|| SYSTEM_TYPEFACE.with(Typeface::clone))
 }
 
 fn effective_weight(style: FontStyle) -> u16 {
@@ -357,21 +407,21 @@ fn fallback_typeface(c: char) -> Typeface {
     })
 }
 
-fn face_for_char(c: char, weight: u16) -> Face {
+fn face_for_char(c: char, weight: u16, primary: &Typeface) -> Face {
+    let key = (primary.unique_id(), c, weight);
     FALLBACK_CACHE.with(|cache| {
-        if let Some(face) = cache.borrow().get(&(c, weight)) {
+        if let Some(face) = cache.borrow().get(&key) {
             return face.clone();
         }
-        let primary = primary_typeface();
-        let base = if typeface_supports_char(&primary, c) {
-            primary
+        let base = if typeface_supports_char(primary, c) {
+            primary.clone()
         } else {
             fallback_typeface(c)
         };
         let face = resolve_face(&base, weight);
         let mut cache = cache.borrow_mut();
         evict_one_if_full(&mut cache, FALLBACK_CACHE_LIMIT);
-        cache.insert((c, weight), face.clone());
+        cache.insert(key, face.clone());
         face
     })
 }
@@ -392,54 +442,73 @@ fn same_face(a: &Face, b: &Face) -> bool {
 
 /// Compute text groups and total width.
 /// Falls back to a single typeface for ASCII-only text to skip per-char lookups.
-fn compute_text_groups(text: &str, size: f32, style: FontStyle) -> (f32, TextGroups) {
+fn compute_text_groups(
+    text: &str,
+    size: f32,
+    style: FontStyle,
+    family: Option<&str>,
+) -> (f32, TextGroups) {
     let weight = effective_weight(style);
-    let primary = primary_typeface();
+    let primary = primary_typeface(family);
     if is_ascii_text(text) && typeface_supports_text(&primary, text) {
         let face = resolve_face(&primary, weight);
-        let width = measure_group(text, &face, size);
-        return (width, vec![(text.to_string(), face, width)]);
+        let group = TextGroup::new(text.to_owned(), face, size);
+        return (group.width, vec![group]);
     }
 
     let mut current_w = 0.0;
     let mut groups: TextGroups = Vec::new();
     let mut current_group = String::new();
     let mut last_face: Option<Face> = None;
+    let mut last_script = None;
     for c in text.chars() {
+        let script = shaping::script(c);
         let face = match &last_face {
             Some(face) if inherits_previous_typeface(c) => face.clone(),
-            _ => face_for_char(c, weight),
+            _ => face_for_char(c, weight, &primary),
         };
         if let Some(last) = &last_face
-            && !same_face(last, &face)
+            && (!same_face(last, &face)
+                || script
+                    .zip(last_script)
+                    .is_some_and(|(script, previous)| script != previous))
         {
-            let group_text = std::mem::take(&mut current_group);
-            let width = measure_group(&group_text, last, size);
-            current_w += width;
-            groups.push((group_text, last.clone(), width));
+            let group = TextGroup::new(std::mem::take(&mut current_group), last.clone(), size);
+            current_w += group.width;
+            groups.push(group);
+            last_script = None;
         }
         last_face = Some(face);
+        last_script = script.or(last_script);
         current_group.push(c);
     }
     if let Some(last) = last_face {
-        let width = measure_group(&current_group, &last, size);
-        current_w += width;
-        groups.push((current_group, last, width));
+        let group = TextGroup::new(current_group, last, size);
+        current_w += group.width;
+        groups.push(group);
     }
 
     (current_w, groups)
 }
 
-fn compute_text_paths(text: &str, size: f32, style: FontStyle) -> Vec<(Path, f32)> {
-    let (_, groups) = compute_text_groups(text, size, style);
+fn compute_text_paths(
+    text: &str,
+    size: f32,
+    style: FontStyle,
+    family: Option<&str>,
+) -> Vec<(Path, f32)> {
+    let (_, groups) = compute_text_groups(text, size, style, family);
     let mut x = 0.0;
     groups
         .into_iter()
-        .map(|(text, face, width)| {
-            let font = make_font(&face, size);
-            let path = skia_safe::utils::text_utils::get_path(text.as_str(), (x, 0.0), &font);
-            x += width;
-            (path, synthetic_stroke(&face, size))
+        .map(|group| {
+            let font = make_font(&group.face, size);
+            let path = group.shaped.as_ref().map_or_else(
+                || skia_safe::utils::text_utils::get_path(group.text.as_str(), (x, 0.0), &font),
+                |run| run.path(&font, x),
+            );
+            x += group.width;
+            (path, synthetic_stroke(&group.face, size))
         })
         .collect()
 }
@@ -448,9 +517,10 @@ fn with_text_groups<R>(
     text: &str,
     size: f32,
     style: FontStyle,
+    family: Option<&str>,
     f: impl FnOnce(&TextCacheValue) -> R,
 ) -> R {
-    let cache_key = hash_cache_key(text, style, size);
+    let cache_key = hash_cache_key(text, style, size, family);
     TEXT_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         if !cache.contains_key(&cache_key) {
@@ -458,14 +528,20 @@ fn with_text_groups<R>(
         }
         let entry = cache
             .entry(cache_key)
-            .or_insert_with(|| compute_text_groups(text, size, style));
+            .or_insert_with(|| compute_text_groups(text, size, style, family));
         f(entry)
     })
 }
 
-impl FontManager {
-    pub fn global() -> &'static FontManager {
-        GLOBAL_FONT_MANAGER.get_or_init(|| FontManager)
+impl<'a> FontManager<'a> {
+    pub fn global() -> &'static FontManager<'static> {
+        GLOBAL_FONT_MANAGER.get_or_init(|| FontManager { family: None })
+    }
+
+    pub fn for_family(family: Option<&'a str>) -> Self {
+        Self {
+            family: family.filter(|family| !family.is_empty() && !family.contains('\0')),
+        }
     }
 
     /// Selects the interface font: a font file wins over an installed family,
@@ -481,6 +557,8 @@ impl FontManager {
             choice.user = None;
         });
         FACE_CACHE.with(|cache| cache.borrow_mut().clear());
+        FAMILY_CACHE.with(|cache| cache.borrow_mut().clear());
+        shaping::clear_font_cache();
         FALLBACK_CACHE.with(|cache| cache.borrow_mut().clear());
         self.clear_text_caches();
     }
@@ -514,15 +592,19 @@ impl FontManager {
 
     pub fn measure_str(&self, text: &str, size: f32, weight: FontWeight) -> crate::types::Rect {
         let paint = text_paint(Rgba::WHITE, None);
-        with_text_groups(text, size, weight.into(), |(_, groups)| {
+        with_text_groups(text, size, weight.into(), self.family, |(_, groups)| {
             let mut x = 0.0;
             let mut bounds: Option<skia_safe::Rect> = None;
-            for (text, face, width) in groups {
-                let synthetic = face_paint(&paint, face, size);
-                let (_, rect) = make_font(face, size).measure_str(text, synthetic.as_ref());
+            for group in groups {
+                let synthetic = face_paint(&paint, &group.face, size);
+                let font = make_font(&group.face, size);
+                let rect = group.shaped.as_ref().map_or_else(
+                    || font.measure_str(&group.text, synthetic.as_ref()).1,
+                    |run| run.bounds(&font, synthetic.as_ref()),
+                );
                 let rect = rect.with_offset((x, 0.0));
                 bounds = Some(bounds.map_or(rect, |bounds| skia_safe::Rect::join2(bounds, rect)));
-                x += width;
+                x += group.width;
             }
             let bounds = bounds.unwrap_or_default();
             crate::types::Rect::from_ltrb(bounds.left, bounds.top, bounds.right, bounds.bottom)
@@ -530,7 +612,10 @@ impl FontManager {
     }
 
     pub fn ascent(&self, size: f32, weight: FontWeight) -> f32 {
-        let face = resolve_face(&primary_typeface(), effective_weight(weight.into()));
+        let face = resolve_face(
+            &primary_typeface(self.family),
+            effective_weight(weight.into()),
+        );
         let (_, metrics) = make_font(&face, size).metrics();
         metrics.ascent
     }
@@ -565,7 +650,7 @@ impl FontManager {
     ) -> Vec<String> {
         let style = style.into();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        hash_cache_key(text, style, size).hash(&mut hasher);
+        hash_cache_key(text, style, size, self.family).hash(&mut hasher);
         max_width.to_bits().hash(&mut hasher);
         let cache_key = hasher.finish();
         if let Some(lines) = TEXT_WRAP_CACHE.with(|cache| cache.borrow().get(&cache_key).cloned()) {
@@ -596,7 +681,7 @@ impl FontManager {
     }
 
     pub fn measure_text_cached(&self, text: &str, size: f32, style: impl Into<FontStyle>) -> f32 {
-        with_text_groups(text, size, style.into(), |(width, _)| *width)
+        with_text_groups(text, size, style.into(), self.family, |(width, _)| *width)
     }
 
     pub fn measure_text_prefixes_cached(
@@ -608,7 +693,7 @@ impl FontManager {
         style: impl Into<FontStyle>,
     ) -> (f32, f32) {
         let style = style.into();
-        let cache_key = hash_cache_key(text, style, size);
+        let cache_key = hash_cache_key(text, style, size, self.family);
         TEXT_PREFIX_CACHE.with(|cache| {
             let mut cache = cache.borrow_mut();
             if !cache.contains_key(&cache_key) {
@@ -616,13 +701,25 @@ impl FontManager {
             }
             let widths = cache.entry(cache_key).or_default();
             let mut width_at = |end: usize| {
-                if end == 0 {
+                if end == 0 || end > text.len() || !text.is_char_boundary(end) {
                     return 0.0;
                 }
                 if let Some((_, width)) = widths.iter().find(|(cached_end, _)| *cached_end == end) {
                     return *width;
                 }
-                let width = compute_text_groups(&text[..end], size, style).0;
+                let width = with_text_groups(text, size, style, self.family, |(_, groups)| {
+                    let mut remaining = end;
+                    let mut width = 0.0;
+                    for group in groups {
+                        if remaining < group.text.len() {
+                            width += group.prefix_width(remaining, size);
+                            break;
+                        }
+                        width += group.width;
+                        remaining -= group.text.len();
+                    }
+                    width
+                });
                 if widths.len() >= TEXT_PREFIX_WIDTH_LIMIT {
                     widths.remove(0);
                 }
@@ -639,19 +736,20 @@ impl FontManager {
             params.text,
             params.size,
             params.weight.into(),
+            self.family,
             |(_, groups)| {
                 let canvas = params.painter.canvas();
                 let mut x = params.x;
-                for (text, face, width) in groups {
-                    let font = make_font(face, params.size);
-                    let synthetic = face_paint(&paint, face, params.size);
-                    canvas.draw_str(
-                        &**text,
-                        (x, params.y),
-                        &font,
-                        synthetic.as_ref().unwrap_or(&paint),
-                    );
-                    x += *width;
+                for group in groups {
+                    let font = make_font(&group.face, params.size);
+                    let synthetic = face_paint(&paint, &group.face, params.size);
+                    let paint = synthetic.as_ref().unwrap_or(&paint);
+                    if let Some(run) = &group.shaped {
+                        run.draw(canvas, (x, params.y), &font, paint);
+                    } else {
+                        canvas.draw_str(group.text.as_str(), (x, params.y), &font, paint);
+                    }
+                    x += group.width;
                 }
             },
         );
@@ -659,16 +757,16 @@ impl FontManager {
 
     pub fn draw_text_as_paths_cached(&self, params: DrawTextCachedParams<'_>) {
         let style = FontStyle::from(params.weight);
-        let cache_key = hash_cache_key(params.text, style, params.size);
+        let cache_key = hash_cache_key(params.text, style, params.size, self.family);
         let paint = text_paint(params.color, params.blur);
         TEXT_PATH_CACHE.with(|cache| {
             let mut cache = cache.borrow_mut();
             if !cache.contains_key(&cache_key) {
                 evict_one_if_full(&mut cache, TEXT_PATH_CACHE_LIMIT);
             }
-            let paths = cache
-                .entry(cache_key)
-                .or_insert_with(|| compute_text_paths(params.text, params.size, style));
+            let paths = cache.entry(cache_key).or_insert_with(|| {
+                compute_text_paths(params.text, params.size, style, self.family)
+            });
             let canvas = params.painter.canvas();
             canvas.save();
             canvas.translate((params.x, params.y));

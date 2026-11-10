@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Point {
@@ -200,6 +200,7 @@ pub struct BackdropShare {
     pub read_fence: usize,
     pub width: u32,
     pub height: u32,
+    pub pixel_scale: u32,
     pub generation: u64,
 }
 
@@ -219,6 +220,7 @@ pub struct BackdropCaptureRequest {
 pub struct BackdropCaptureFrame {
     pub write_value: u64,
     pub serial: u64,
+    pub captured_at: Option<Instant>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -310,7 +312,6 @@ pub enum TrayAction {
     ToggleVisibility,
     OpenSettings,
     ShowGuide,
-    ToggleRecording,
     Restart,
     Exit,
 }
@@ -351,7 +352,6 @@ pub struct TrayLabels {
     pub toggle: String,
     pub settings: String,
     pub guide: String,
-    pub record: String,
     pub restart: String,
     pub exit: String,
     pub tooltip: String,

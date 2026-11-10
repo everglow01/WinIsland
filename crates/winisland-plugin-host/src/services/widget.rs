@@ -184,7 +184,9 @@ pub unsafe extern "C" fn submit_draw_list(
     {
         return status;
     }
-    record.draw_list = Arc::from(bytes);
+    if record.draw_list.as_ref() != bytes {
+        record.draw_list = Arc::from(bytes);
+    }
     record.redraw = true;
     drop(state);
     host.extensions.changed();

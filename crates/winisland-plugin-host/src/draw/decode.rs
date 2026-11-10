@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use winisland_plugin_api::draw::v2 as wire;
 use winisland_render::text::FontManager;
 use winisland_render::{GradientStop, Image, ImageFit, Path, PathBuilder, Point, Rect, Rgba, Vec2};
@@ -8,6 +10,8 @@ pub struct PreparedFrame {
     pub logical_width: f32,
     pub logical_height: f32,
     pub(crate) commands: Vec<DrawOp>,
+    pub(crate) source: Option<Arc<[u8]>>,
+    pub(crate) image_ids: Vec<u64>,
 }
 
 pub(crate) enum DrawOp {
@@ -174,6 +178,7 @@ pub fn prepare(
     mut image: impl FnMut(u64) -> Option<Image>,
 ) -> Result<PreparedFrame, &'static str> {
     let mut commands = Vec::with_capacity(list.commands.len());
+    let mut image_ids = Vec::new();
     for command in &list.commands {
         let mut reader = Reader::new(command.payload);
         let operation = match command.opcode {
@@ -251,6 +256,7 @@ pub fn prepare(
             wire::DRAW_IMAGE => {
                 let id = reader.u64()?;
                 let image = image(id).ok_or("validated image is no longer available")?;
+                image_ids.push(id);
                 let rect = reader.rect()?;
                 let fit = reader.fit()?;
                 DrawOp::Image(image, rect, fit, reader.u8()?)
@@ -320,9 +326,13 @@ pub fn prepare(
         reader.finish()?;
         commands.push(operation);
     }
+    image_ids.sort_unstable();
+    image_ids.dedup();
     Ok(PreparedFrame {
         logical_width: list.logical_width,
         logical_height: list.logical_height,
         commands,
+        source: None,
+        image_ids,
     })
 }

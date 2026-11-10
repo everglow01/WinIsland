@@ -512,7 +512,7 @@ impl MarkdownParser {
 }
 
 struct LayoutBuilder<'a> {
-    fm: &'a FontManager,
+    fm: &'a FontManager<'a>,
     width: f32,
     y: f32,
     ops: Vec<DrawOp>,
@@ -529,7 +529,7 @@ struct InlineLayout<'a> {
 }
 
 impl<'a> LayoutBuilder<'a> {
-    fn new(fm: &'a FontManager, width: f32) -> Self {
+    fn new(fm: &'a FontManager<'a>, width: f32) -> Self {
         Self {
             fm,
             width,

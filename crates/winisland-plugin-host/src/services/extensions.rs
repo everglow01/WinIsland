@@ -38,7 +38,7 @@ fn target(host: &HostRuntime, token: PluginToken, id: WidgetId) -> Result<(), Pl
         .require(token, ResourceKind::Widget, id.get())
 }
 
-fn text(bytes: &[u8]) -> Result<&str, PluginStatus> {
+pub(crate) fn text(bytes: &[u8]) -> Result<&str, PluginStatus> {
     let end = bytes
         .iter()
         .position(|byte| *byte == 0)
