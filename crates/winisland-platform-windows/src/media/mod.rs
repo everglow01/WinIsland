@@ -1,7 +1,7 @@
 mod thumbnail;
 
 use std::sync::{Arc, mpsc};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use windows::Foundation::TypedEventHandler;
 use windows::Media::Control::{
@@ -166,18 +166,47 @@ impl MediaSessionHandle for WindowsMediaSession {
             .TryGetMediaPropertiesAsync()
             .and_then(|operation| operation.join())
             .map_err(PlatformError::backend)?;
-        Ok(read_track(&props))
+        let mut track = read_track(&props);
+        // Apple Music combines artist and album in Artist instead of filling AlbumTitle.
+        if self.source_app_id().as_deref() == Some("AppleInc.AppleMusicWin_nzyj5cx40ttqa!App")
+            && track.album.is_empty()
+            && let Some((artist, album)) = track.artist.split_once(" — ")
+            && !artist.trim().is_empty()
+            && !album.trim().is_empty()
+        {
+            track.album = album.trim().to_string();
+            track.artist = artist.trim().to_string();
+        }
+        Ok(track)
     }
 
     fn timeline(&self) -> Option<Timeline> {
         let props = self.0.GetTimelineProperties().ok()?;
-        Some(timeline_from_ticks(
+        let mut timeline = timeline_from_ticks(
             props.StartTime().map_or(0, |value| value.Duration),
             props.EndTime().map_or(0, |value| value.Duration),
             props.MinSeekTime().map_or(0, |value| value.Duration),
             props.MaxSeekTime().map_or(0, |value| value.Duration),
             props.Position().map_or(0, |value| value.Duration),
-        ))
+        );
+        // SMTC Position is measured at LastUpdatedTime, not when it is read.
+        const WINDOWS_TO_UNIX_EPOCH_TICKS: i64 = 116_444_736_000_000_000;
+        if self.source_app_id().as_deref() == Some("AppleInc.AppleMusicWin_nzyj5cx40ttqa!App")
+            && self.is_playing()
+            && let Ok(updated) = props.LastUpdatedTime()
+            && let Some(unix_ticks) = updated
+                .UniversalTime
+                .checked_sub(WINDOWS_TO_UNIX_EPOCH_TICKS)
+            && let Ok(unix_ticks) = u64::try_from(unix_ticks)
+            && let Some(updated_at) = UNIX_EPOCH.checked_add(Duration::from_micros(unix_ticks / 10))
+            && let Ok(elapsed) = SystemTime::now().duration_since(updated_at)
+        {
+            timeline.position = timeline.position.saturating_add(elapsed);
+            if !timeline.duration.is_zero() {
+                timeline.position = timeline.position.min(timeline.duration);
+            }
+        }
+        Some(timeline)
     }
 
     fn send(&self, command: MediaCommand) -> Result<bool, PlatformError> {

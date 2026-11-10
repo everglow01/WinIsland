@@ -437,11 +437,8 @@ fn update_media_info(
     changed |= update_playback_state(info, update, track_changed);
     let duration_was_unknown = info.duration_ms == 0;
     changed |= update_duration(info, update.timeline);
-    if duration_was_unknown
-        && info.duration_ms > 0
-        && info.lyrics.is_none()
-        && requests.lyrics.is_none()
-    {
+    // Lyrics chosen without a duration may belong to a shortened version of the song.
+    if duration_was_unknown && info.duration_ms > 0 && requests.lyrics.is_none() {
         queue_lyrics(info, requests);
     }
     changed
@@ -554,6 +551,13 @@ fn sync_timeline(
     info.last_smtc_pos = timeline.position_ms;
     if !should_sync || seek_guard_active {
         return false;
+    }
+    if !track_changed && drift_ms > TIMELINE_DRIFT_THRESHOLD_MS {
+        log::info!(
+            "SMTC: timeline corrected from {current_position}ms to {}ms (drift {drift_ms}ms)",
+            timeline.position_ms
+        );
+        log::logger().flush();
     }
     if timeline.position_ms > 0 || !track_changed {
         info.position_ms = timeline.position_ms;
